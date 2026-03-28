@@ -182,6 +182,20 @@ python3 -m streamlit run dashboard/app.py
 
 Use the sidebar to point at another CSV path if needed. **Auto-refresh is on by default** (polls the CSV every few seconds) so you do **not** need to reload the browser when **`submission.csv`** changes; turn it off for a static file. Pair with **`python3 run_p3.py --live -o submission.csv`** for continuous updates. Charts: counts by **symbol**, **violation_type**, optional **`ml_rank_p`** histogram, flags per **day**, plus a filterable table (filters persist across refreshes).
 
+### Streamlit Community Cloud (hosted)
+
+`submission.csv` is **gitignored**, so the deployed app does **not** ship your output file. The dashboard supports:
+
+1. **Upload primary CSV** (sidebar) — always works; best for demos and private results.  
+2. **Secrets URLs** — App → Settings → Secrets, TOML keys:
+   - `PRIMARY_SUBMISSION_URL` — HTTPS link to a **raw** CSV (same columns as `submission.csv`).  
+   - `SECOND_SUBMISSION_URL` — optional second file for the compare tab.  
+   See **`.streamlit/secrets.toml.example`**.
+
+**Cloud settings:** set **Main file path** to **`dashboard/app.py`**. **Python dependencies** come from repo-root **`requirements.txt`**.
+
+Example deployment: `https://yashassuresh775-bits-dashboardapp-49yjj9.streamlit.app/` — after each git push, Cloud rebuilds; use upload or secrets so the app has data.
+
 ## Tuning before submit
 
 - Edit **`p3/config.py`**: `MAX_SUBMISSION_ROWS`, `PEG_BREAK_ABS`, **`BAT_HOUR_VOLUME_MULT`**, **`MAJOR_PAIR_HOD_MULT`**, **`MAJOR_PAIR_MIN_NOTIONAL_USDT`**, `ROUND_TRIP_*`, `STRUCT_*`, `IF_CONTAMINATION`, `IF_SYMBOLS`, **`USE_ENSEMBLE_ANOMALY`**, **`USE_ML_RERANKER`**, **`TRUSTED_DETECTORS`**, **`ML_*`**.  
@@ -207,7 +221,8 @@ Use the sidebar to point at another CSV path if needed. **Auto-refresh is on by 
 | `scripts/fetch_binance_history.py` | Paginated historical klines + agg trades → `data/binance-hist/` |
 | `scripts/eda_pack_stats.py` | Vectorised EDA report: notionals, peg, BAT hours, major-pair HOD (`make eda-stats`) |
 | `scripts/benchmark_p3.py` | Example timed run + submission smoke tests |
-| `dashboard/app.py` | Streamlit UI for `submission.csv` |
+| `dashboard/app.py` | Streamlit UI (local path, **upload**, or **Secrets** URLs — Cloud-ready) |
+| `.streamlit/secrets.toml.example` | Template for `PRIMARY_SUBMISSION_URL` / `SECOND_SUBMISSION_URL` on Streamlit Cloud |
 
 ## Disclaimer
 

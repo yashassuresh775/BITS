@@ -9,6 +9,9 @@ __pycache__/
 dist/
 build/
 
+# Streamlit local secrets (use Cloud UI or secrets.toml.example)
+.streamlit/secrets.toml
+
 # OS / IDE
 .DS_Store
 .idea/

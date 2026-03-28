@@ -2,10 +2,15 @@
 Problem 3 submission explorer — run from repo root:
 
   streamlit run dashboard/app.py
+
+On **Streamlit Community Cloud**, `submission.csv` is usually not in the repo (gitignored).
+Use **Upload CSV** in the sidebar or set **Secrets** URLs (see README / `.streamlit/secrets.toml.example`).
 """
 
 from __future__ import annotations
 
+import hashlib
+import io
 import re
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +27,16 @@ except ImportError:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CSV = REPO_ROOT / "submission.csv"
 ML_P_RE = re.compile(r"ml_rank_p=([\d.]+)")
+REQUIRED_COLS = ("symbol", "date", "trade_id", "violation_type", "remarks")
+
+
+def _secret_str(key: str) -> str | None:
+    try:
+        v = st.secrets[key]
+        s = str(v).strip()
+        return s or None
+    except (KeyError, FileNotFoundError, TypeError, RuntimeError):
+        return None
 
 
 def submission_file_mtime(path: str) -> float:
@@ -32,22 +47,46 @@ def submission_file_mtime(path: str) -> float:
         return -1.0
 
 
+def _validate_and_enrich_submission(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    for col in REQUIRED_COLS:
+        if col not in df.columns:
+            st.error(f"Missing column `{col}` in CSV.")
+            return pd.DataFrame()
+    out = df.copy()
+    out["remarks"] = out["remarks"].fillna("").astype(str)
+    out["violation_type"] = out["violation_type"].fillna("").astype(str)
+    ml = out["remarks"].str.extract(ML_P_RE, expand=False)
+    out["ml_rank_p"] = pd.to_numeric(ml, errors="coerce")
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    return out
+
+
 @st.cache_data(show_spinner="Loading submission…")
 def load_submission(path: str, _file_mtime: float) -> pd.DataFrame:
     p = Path(path).expanduser().resolve()
     if not p.is_file():
         return pd.DataFrame()
     df = pd.read_csv(p)
-    for col in ("symbol", "date", "trade_id", "violation_type", "remarks"):
-        if col not in df.columns:
-            st.error(f"Missing column `{col}` in CSV.")
-            return pd.DataFrame()
-    df["remarks"] = df["remarks"].fillna("").astype(str)
-    df["violation_type"] = df["violation_type"].fillna("").astype(str)
-    ml = df["remarks"].str.extract(ML_P_RE, expand=False)
-    df["ml_rank_p"] = pd.to_numeric(ml, errors="coerce")
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    return df
+    return _validate_and_enrich_submission(df)
+
+
+def _bytes_cache_key(content: bytes, label: str) -> str:
+    h = hashlib.sha256(content[: min(len(content), 500_000)]).hexdigest()[:20]
+    return f"{label}:{len(content)}:{h}"
+
+
+@st.cache_data(show_spinner="Loading uploaded CSV…")
+def load_submission_bytes(content: bytes, _cache_key: str) -> pd.DataFrame:
+    df = pd.read_csv(io.BytesIO(content))
+    return _validate_and_enrich_submission(df)
+
+
+@st.cache_data(show_spinner="Loading submission from URL…", ttl=120)
+def load_submission_url(url: str, _url_key: str) -> pd.DataFrame:
+    df = pd.read_csv(url)
+    return _validate_and_enrich_submission(df)
 
 
 def render_submission_panel(
@@ -174,20 +213,45 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     st.title("BITS — Problem 3 submission explorer")
-    st.caption("Visualize `submission.csv` from the crypto anomaly pipeline.")
+    st.caption(
+        "Local: point at `submission.csv` on disk. **Streamlit Cloud:** upload a CSV or set **Secrets** URLs (README)."
+    )
+
+    secret_primary = _secret_str("PRIMARY_SUBMISSION_URL")
+    secret_second = _secret_str("SECOND_SUBMISSION_URL")
 
     with st.sidebar:
         st.header("Data")
+        st.markdown(
+            "**Hosted (Streamlit Cloud):** `submission.csv` is not in git — "
+            "**upload** your file here or set `PRIMARY_SUBMISSION_URL` in app secrets."
+        )
+        upload_primary = st.file_uploader(
+            "Upload primary CSV",
+            type=["csv"],
+            key="upload_primary",
+            help="Highest priority: use this instead of path / secret URL.",
+        )
+        upload_second = st.file_uploader(
+            "Upload second CSV (optional)",
+            type=["csv"],
+            key="upload_second",
+            help="Compare tab: overrides second path / secret URL.",
+        )
+        if secret_primary:
+            st.caption("Secrets: primary URL is set.")
+        if secret_second:
+            st.caption("Secrets: second URL is set.")
         csv_path = st.text_input(
-            "Primary submission CSV",
+            "Primary submission CSV path",
             value=str(DEFAULT_CSV),
-            help="e.g. submission.csv or submission_offline.csv",
+            help="Local path when not using upload or PRIMARY_SUBMISSION_URL.",
         )
         csv_path_b = st.text_input(
-            "Second CSV (optional — compare with live)",
+            "Second CSV path (optional — compare with live)",
             value="",
             placeholder="submission_live.csv",
-            help="After `python3 run_p3.py --dual` (or `make dual`), set to submission_live.csv for two tabs.",
+            help="Local path when not using second upload or SECOND_SUBMISSION_URL.",
         )
         st.divider()
         live = st.toggle(
@@ -223,19 +287,43 @@ def main() -> None:
         else:
             st.sidebar.warning("Install `streamlit-autorefresh` for live mode (`pip install -r requirements.txt`).")
 
-    mtime_a = submission_file_mtime(csv_path)
-    df_a = load_submission(csv_path, mtime_a)
+    # Primary: upload > secret URL > local path
+    df_a = pd.DataFrame()
+    primary_src = ""
+    if upload_primary is not None:
+        raw_p = upload_primary.getvalue()
+        ck_p = _bytes_cache_key(raw_p, upload_primary.name or "primary.csv")
+        df_a = load_submission_bytes(raw_p, ck_p)
+        primary_src = f"upload:{ck_p}"
+    elif secret_primary:
+        df_a = load_submission_url(secret_primary, secret_primary)
+        primary_src = f"url:{secret_primary}"
+    else:
+        mtime_a = submission_file_mtime(csv_path)
+        df_a = load_submission(csv_path, mtime_a)
+        primary_src = f"path:{Path(csv_path).expanduser().resolve()}|{mtime_a}"
 
     path_b = csv_path_b.strip()
     df_b = pd.DataFrame()
-    if path_b:
+    second_src = ""
+    if upload_second is not None:
+        raw_s = upload_second.getvalue()
+        ck_s = _bytes_cache_key(raw_s, upload_second.name or "second.csv")
+        df_b = load_submission_bytes(raw_s, ck_s)
+        second_src = f"upload:{ck_s}"
+    elif secret_second:
+        df_b = load_submission_url(secret_second, secret_second)
+        second_src = f"url:{secret_second}"
+    elif path_b:
         mtime_b = submission_file_mtime(path_b)
         df_b = load_submission(path_b, mtime_b)
+        second_src = f"path:{Path(path_b).expanduser().resolve()}|{mtime_b}"
 
     if df_a.empty:
         st.warning(
-            "No data loaded for the primary CSV. Run the pipeline first or fix the path. "
-            f"Default expects: `{DEFAULT_CSV}`"
+            "No primary data loaded. On **Streamlit Cloud**, use **Upload primary CSV** "
+            "or add `PRIMARY_SUBMISSION_URL` in **App settings → Secrets** (see README). "
+            f"Locally, run `python3 run_p3.py -o submission.csv` or fix the path. Default: `{DEFAULT_CSV}`"
         )
         return
 
@@ -245,8 +333,7 @@ def main() -> None:
             "Symbol filters reset when the file changes if the sidebar toggle is on."
         )
 
-    rp_a = str(Path(csv_path).expanduser().resolve())
-    sig_a = f"{rp_a}|{mtime_a}|{len(df_a)}"
+    sig_a = f"{primary_src}|n={len(df_a)}"
 
     cbtn1, cbtn2 = st.sidebar.columns(2)
     with cbtn1:
@@ -254,23 +341,17 @@ def main() -> None:
             st.session_state["p1_sym"] = sorted(df_a["symbol"].dropna().unique().tolist())
             st.rerun()
     with cbtn2:
-        if path_b and not df_b.empty and st.button(
+        if not df_b.empty and st.button(
             "All sym · P2", help="Second tab: select every symbol", key="btn_all_sym_p2"
         ):
             st.session_state["p2_sym"] = sorted(df_b["symbol"].dropna().unique().tolist())
             st.rerun()
 
-    if path_b and df_b.empty:
-        st.info(f"Second CSV path set but no valid rows loaded: `{path_b}`")
+    if (path_b or upload_second is not None or secret_second) and df_b.empty:
+        hint = path_b or "(upload or SECOND_SUBMISSION_URL)"
+        st.info(f"Second source set but no valid rows loaded: `{hint}`")
 
-    if not path_b:
-        render_submission_panel(
-            df_a,
-            key_prefix="p1_",
-            data_signature=sig_a,
-            reset_filters_on_csv_change=reset_on_change,
-        )
-    elif df_b.empty:
+    if df_b.empty:
         render_submission_panel(
             df_a,
             key_prefix="p1_",
@@ -278,8 +359,7 @@ def main() -> None:
             reset_filters_on_csv_change=reset_on_change,
         )
     else:
-        rp_b = str(Path(path_b).expanduser().resolve())
-        sig_b = f"{rp_b}|{mtime_b}|{len(df_b)}"
+        sig_b = f"{second_src}|n={len(df_b)}"
         tab_a, tab_b = st.tabs(["Primary (e.g. student pack)", "Second (e.g. Binance live)"])
         with tab_a:
             render_submission_panel(
