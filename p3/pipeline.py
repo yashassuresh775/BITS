@@ -8,6 +8,7 @@ from p3.config import (
     ENSEMBLE_SYMBOLS,
     IF_SYMBOLS,
     MAX_SUBMISSION_ROWS,
+    SYMBOLS,
     USE_ENSEMBLE_ANOMALY,
     USE_ML_RERANKER,
 )
@@ -17,7 +18,12 @@ from p3.detectors.market_patterns import (
     detect_pump_dump_trades,
     detect_spoofing_proxy,
 )
-from p3.detectors.rules import detect_peg_break, detect_wash_volume_at_peg
+from p3.detectors.rules import (
+    detect_bat_hot_hours,
+    detect_major_pair_hod_spike,
+    detect_peg_break,
+    detect_wash_volume_at_peg,
+)
 from p3.detectors.wallet_patterns import (
     detect_aml_structuring,
     detect_chain_pass_through,
@@ -38,12 +44,11 @@ from p3.ml.extra_features import augment_graph_and_sequence
 
 
 def _prepare_symbol(
-    data_root: Path,
     symbol: str,
     btc_market: pd.DataFrame,
+    market: pd.DataFrame,
+    trades: pd.DataFrame,
 ) -> tuple[list[pd.DataFrame], pd.DataFrame]:
-    market = load_market(data_root, symbol)
-    trades = load_trades(data_root, symbol)
     enriched = attach_market_to_trades(trades, market)
     enriched["qty_z"] = symbol_quantity_zscore(enriched)
     enriched["wallet_freq"] = wallet_frequency(enriched)
@@ -53,6 +58,8 @@ def _prepare_symbol(
 
     parts.append(detect_peg_break(trades, symbol))
     parts.append(detect_wash_volume_at_peg(trades, symbol))
+    parts.append(detect_bat_hot_hours(trades, market, symbol))
+    parts.append(detect_major_pair_hod_spike(trades, symbol))
 
     parts.append(detect_wash_same_wallet(trades, symbol))
     parts.append(detect_round_trip_pair(trades, symbol))
@@ -100,21 +107,10 @@ def _corroborate_and_dedupe(hits: pd.DataFrame) -> pd.DataFrame:
     return h
 
 
-def run_pipeline(data_root: str | Path) -> pd.DataFrame:
-    root = Path(data_root)
-    btc = load_btc_market(root)
-    symbols = discover_symbols(root)
-    chunks: list[pd.DataFrame] = []
-    enriched_map: dict[str, pd.DataFrame] = {}
-
-    for sym in symbols:
-        try:
-            parts, enr = _prepare_symbol(root, sym, btc)
-            enriched_map[sym] = enr
-            chunks.extend(parts)
-        except FileNotFoundError:
-            continue
-
+def _finalize_hits(
+    chunks: list[pd.DataFrame],
+    enriched_map: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
     empty_cols = [
         "symbol",
         "date",
@@ -126,21 +122,55 @@ def run_pipeline(data_root: str | Path) -> pd.DataFrame:
     ]
     if not chunks:
         return pd.DataFrame(columns=empty_cols)
-
     hits_raw = pd.concat(chunks, ignore_index=True)
     h = _corroborate_and_dedupe(hits_raw)
-
     if h.empty:
         return pd.DataFrame(columns=empty_cols)
-
     if USE_ML_RERANKER:
         from p3.ml.ranker import ml_rerank
 
-        h = ml_rerank(h, enriched_map, hits_raw)
-    else:
-        h = h.sort_values("score", ascending=False).head(MAX_SUBMISSION_ROWS)
+        return ml_rerank(h, enriched_map, hits_raw)
+    return h.sort_values("score", ascending=False).head(MAX_SUBMISSION_ROWS)
 
-    return h
+
+def run_pipeline_from_frames(
+    frames: dict[str, tuple[pd.DataFrame, pd.DataFrame]],
+) -> pd.DataFrame:
+    """Run detectors on pre-built (market, trades) frames per symbol (e.g. Binance live)."""
+    if "BTCUSDT" not in frames:
+        raise ValueError("frames must include BTCUSDT for cross-pair divergence.")
+    btc = frames["BTCUSDT"][0]
+    symbols = [s for s in SYMBOLS if s in frames]
+    chunks: list[pd.DataFrame] = []
+    enriched_map: dict[str, pd.DataFrame] = {}
+
+    for sym in symbols:
+        market, trades = frames[sym]
+        parts, enr = _prepare_symbol(sym, btc, market, trades)
+        enriched_map[sym] = enr
+        chunks.extend(parts)
+
+    return _finalize_hits(chunks, enriched_map)
+
+
+def run_pipeline(data_root: str | Path) -> pd.DataFrame:
+    root = Path(data_root)
+    btc = load_btc_market(root)
+    symbols = discover_symbols(root)
+    chunks: list[pd.DataFrame] = []
+    enriched_map: dict[str, pd.DataFrame] = {}
+
+    for sym in symbols:
+        try:
+            market = load_market(root, sym)
+            trades = load_trades(root, sym)
+            parts, enr = _prepare_symbol(sym, btc, market, trades)
+            enriched_map[sym] = enr
+            chunks.extend(parts)
+        except FileNotFoundError:
+            continue
+
+    return _finalize_hits(chunks, enriched_map)
 
 
 def hits_to_submission(hits: pd.DataFrame) -> pd.DataFrame:

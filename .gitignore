@@ -30,6 +30,13 @@ credentials.json
 data/student-pack/*
 !data/student-pack/.gitkeep
 
+# Binance backfill (large; regenerate with scripts/fetch_binance_history.py)
+data/binance-hist/*
+!data/binance-hist/.gitkeep
+
 # Generated submission (regenerate with run_p3.py; may reflect competitive output)
 submission.csv
+submission_offline.csv
+submission_live.csv
+submission_from_binance.csv
 *.submission.csv

@@ -32,12 +32,13 @@ def trades_path(data_root: Path, symbol: str) -> Path:
     raise FileNotFoundError(f"Trades file for {symbol} not under {data_root}")
 
 
-def load_market(data_root: Path, symbol: str) -> pd.DataFrame:
-    path = market_path(data_root, symbol)
-    df = pd.read_csv(path, parse_dates=["Date"])
-    df = df.sort_values("Date").reset_index(drop=True)
-    base_vol = _base_volume_col(list(df.columns))
-    df = df.rename(
+def normalize_market_dataframe(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """Same transforms as ``load_market`` after reading CSV (for API-fed frames)."""
+    out = df.copy()
+    out["Date"] = pd.to_datetime(out["Date"])
+    out = out.sort_values("Date").reset_index(drop=True)
+    base_vol = _base_volume_col(list(out.columns))
+    out = out.rename(
         columns={
             "Symbol": "symbol",
             base_vol: "vol_base",
@@ -45,29 +46,42 @@ def load_market(data_root: Path, symbol: str) -> pd.DataFrame:
             "tradecount": "tradecount",
         }
     )
-    df["symbol"] = df["symbol"].fillna(symbol)
+    out["symbol"] = out["symbol"].fillna(symbol)
     for c in ("Open", "High", "Low", "Close"):
-        if c not in df.columns:
-            raise ValueError(f"Missing {c} in market CSV")
-    df["mid"] = (df["High"] + df["Low"]) / 2.0
-    return df
+        if c not in out.columns:
+            raise ValueError(f"Missing {c} in market frame")
+    out["mid"] = (out["High"] + out["Low"]) / 2.0
+    return out
+
+
+def load_market(data_root: Path, symbol: str) -> pd.DataFrame:
+    path = market_path(data_root, symbol)
+    df = pd.read_csv(path, parse_dates=["Date"])
+    return normalize_market_dataframe(df, symbol)
+
+
+def normalize_trades_dataframe(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """Same transforms as ``load_trades`` after reading CSV (for API-fed frames)."""
+    out = df.copy()
+    out["symbol"] = symbol
+    if "wallet_id" not in out.columns and "trader_id" in out.columns:
+        out = out.rename(columns={"trader_id": "wallet_id"})
+    need = {"trade_id", "timestamp", "price", "quantity", "side", "wallet_id"}
+    missing = need - set(out.columns)
+    if missing:
+        raise ValueError(f"Trades missing columns {missing}")
+    out["timestamp"] = pd.to_datetime(out["timestamp"])
+    out["side"] = out["side"].astype(str).str.upper()
+    out["notional"] = out["price"] * out["quantity"]
+    out["date"] = out["timestamp"].dt.normalize()
+    out["minute"] = out["timestamp"].dt.floor("min")
+    return out
 
 
 def load_trades(data_root: Path, symbol: str) -> pd.DataFrame:
     path = trades_path(data_root, symbol)
     df = pd.read_csv(path, parse_dates=["timestamp"])
-    df["symbol"] = symbol
-    if "wallet_id" not in df.columns and "trader_id" in df.columns:
-        df = df.rename(columns={"trader_id": "wallet_id"})
-    need = {"trade_id", "timestamp", "price", "quantity", "side", "wallet_id"}
-    missing = need - set(df.columns)
-    if missing:
-        raise ValueError(f"Trades missing columns {missing}: {path}")
-    df["side"] = df["side"].str.upper()
-    df["notional"] = df["price"] * df["quantity"]
-    df["date"] = df["timestamp"].dt.normalize()
-    df["minute"] = df["timestamp"].dt.floor("min")
-    return df
+    return normalize_trades_dataframe(df, symbol)
 
 
 def load_btc_market(data_root: Path) -> pd.DataFrame:

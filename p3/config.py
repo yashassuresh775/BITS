@@ -18,6 +18,10 @@ PEG_BREAK_ABS = 0.005  # 0.5%
 # BATUSDT / illiquid: hour volume vs daily median of hours
 BAT_HOUR_VOLUME_MULT = 5.0
 
+# BTC/ETH: trade notional vs median for same hour-of-day (UTC) in the loaded sample (vectorised).
+MAJOR_PAIR_HOD_MULT = 7.0
+MAJOR_PAIR_MIN_NOTIONAL_USDT = 2_500.0
+
 # Wash / round-trip time window (seconds)
 WASH_WINDOW_SEC = 180
 

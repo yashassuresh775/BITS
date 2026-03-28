@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pandas as pd
 
-from p3.config import BAT_HOUR_VOLUME_MULT, PEG_BREAK_ABS, PEG_CENTER
+from p3.config import (
+    BAT_HOUR_VOLUME_MULT,
+    MAJOR_PAIR_HOD_MULT,
+    MAJOR_PAIR_MIN_NOTIONAL_USDT,
+    PEG_BREAK_ABS,
+    PEG_CENTER,
+)
 
 
 def detect_peg_break(trades: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -83,7 +89,7 @@ def detect_bat_hot_hours(
     if tr.empty:
         return pd.DataFrame()
     tr = tr.drop(columns=["day", "hour_bucket"], errors="ignore")
-    tr["violation_type"] = "aml_structuring"
+    tr["violation_type"] = "bat_hot_hour"
     tr["detector"] = "bat_hot_hour"
     tr["score"] = 2
     tr["remarks"] = (
@@ -91,3 +97,34 @@ def detect_bat_hot_hours(
         "that day's median hourly volume; review for smurfing/coordinated activity."
     )
     return tr
+
+
+def detect_major_pair_hod_spike(trades: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """
+    BTC/ETH: flag trades whose notional is far above the **hour-of-day (UTC)** median
+    in the current sample (vectorised ``groupby`` + ``transform``).
+    """
+    if symbol not in ("BTCUSDT", "ETHUSDT"):
+        return pd.DataFrame()
+    t = trades
+    hod = t["timestamp"].dt.hour
+    med = t.groupby(hod, observed=True)["notional"].transform("median")
+    med = med.replace(0, float("nan"))
+    ratio = t["notional"] / med
+    mask = (ratio >= MAJOR_PAIR_HOD_MULT) & (t["notional"] >= MAJOR_PAIR_MIN_NOTIONAL_USDT)
+    hit = t.loc[mask].copy()
+    if hit.empty:
+        return pd.DataFrame()
+    r = ratio.loc[mask]
+    hit["violation_type"] = "hod_notional_spike"
+    hit["detector"] = "major_pair_hod_spike"
+    hit["score"] = 2
+    hit["remarks"] = (
+        symbol
+        + ": notional "
+        + hit["notional"].astype(float).round(2).astype(str)
+        + " USDT vs hod-median × "
+        + r.astype(float).round(1).astype(str)
+        + f" (threshold {MAJOR_PAIR_HOD_MULT:g}×, min {MAJOR_PAIR_MIN_NOTIONAL_USDT:g} USDT)."
+    )
+    return hit

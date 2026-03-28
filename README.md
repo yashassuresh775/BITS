@@ -6,7 +6,9 @@ Python pipeline for the **crypto blind anomaly hunt** (Problem 3): load 8 pairs 
 
 1. **Rule layer (high precision)**  
    - **USDCUSDT `peg_break`**: `abs(price - 1.0) > 0.005`  
-   - **`wash_volume_at_peg`**: rapid BUY/SELL flips at ~$1.00 on USDC (heuristic)
+   - **`wash_volume_at_peg`**: rapid BUY/SELL flips at ~$1.00 on USDC (heuristic)  
+   - **`bat_hot_hour`**: BATUSDT trades in hours where bar **USDT volume ≥ 5×** that day’s median hourly volume  
+   - **`hod_notional_spike`**: **BTC/ETH** trades with **notional ≥ 7×** the sample’s median notional for the same **UTC hour-of-day** (vectorised)
 
 2. **Wallet / graph-style patterns**  
    - Same-wallet **wash** within a short window (flat net, matched prices)  
@@ -38,6 +40,23 @@ Python pipeline for the **crypto blind anomaly hunt** (Problem 3): load 8 pairs 
    - One row per **`trade_id`** (prefer non-empty **`violation_type`** when **`score`** ties).  
    - Final row cap applied **after** ML re-rank (or by score if **`USE_ML_RERANKER`** is **False**).
 
+9. **BATUSDT hot hours** — bar volume by hour vs that day’s median hourly volume; flag trades in hours **≥5×** median (`bat_hot_hour`).  
+10. **BTC / ETH hour-of-day baselines** — vectorised median **notional per UTC hour** in the loaded sample; flag large trades **≥7×** that hour’s median with a minimum notional floor (`hod_notional_spike` / `major_pair_hod_spike`).
+
+### Hackathon workflow alignment (checklist)
+
+| Suggested step | In this repo |
+|----------------|--------------|
+| 1. Load 8 pairs + basic price/qty stats | `python3 scripts/eda_pack_stats.py` or `make eda-stats` — full **mental-model report** (USDC peg audit, BAT hot hours, BTC/ETH UTC-hour notionals, span/trades-per-day). `--brief` = one table only; `--out reports/eda.txt` saves a copy. |
+| 2. USDC peg `abs(price-1)>0.005` | `detect_peg_break` in `p3/detectors/rules.py` |
+| 3. BATUSDT hourly volume vs daily median | `detect_bat_hot_hours` (wired in `p3/pipeline.py`) |
+| 4. IF on DOGE/LTC/SOL/XRP | `p3/detectors/isolation.py` + `IF_SYMBOLS` |
+| 5. BTC/ETH tighter baselines | `detect_major_pair_hod_spike` + ensemble/ wallet stack on those symbols |
+| 6. Build `submission.csv` incrementally | Regenerate often with `run_p3.py -o submission.csv`; cap **`MAX_SUBMISSION_ROWS`**. |
+| Submission at repo root | Default `-o submission.csv`; file gitignored. |
+| README approach | This file + remarks on each row for partial credit. |
+| Fast runtime | Prefer **groupby/transform**, rolling windows, matrix ops in `features` / detectors; avoid Python loops on rows where possible. |
+
 ## Data layout (student-pack)
 
 **Default location in this repo:** `data/student-pack/`  
@@ -59,19 +78,77 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+**macOS note:** If the shell says `command not found: python`, use **`python3`** instead, or run **`source .venv/bin/activate`** first (the venv adds a `python` command). From the repo root you can also run **`make run`**, **`make dual`**, or **`make dashboard`** (the Makefile prefers **`.venv/bin/python`** when it exists).
+
 ## Run
 
 ```bash
 # If data lives in ./data/student-pack/ (recommended):
-python run_p3.py -o submission.csv
+python3 run_p3.py -o submission.csv
 # `submission.csv` is gitignored by default (regenerate locally; avoids committing outputs).
 
 # Or set explicitly:
 export STUDENT_PACK=/path/to/student-pack
-python run_p3.py --data-root /path/to/student-pack -o submission.csv
+python3 run_p3.py --data-root /path/to/student-pack -o submission.csv
 ```
 
-On a typical laptop the full 8-pair run is **~25–35s** with ML layers enabled (extra LOF + boosting fit per run).
+### Live (Binance public REST, near–real-time)
+
+Pulls **1m klines** + **aggregate trades** for all **`SYMBOLS`**, runs the same detectors, and rewrites **`submission.csv`** on a timer (pair with the Streamlit dashboard **Live reload**).
+
+```bash
+# Loop every 30s (Ctrl+C to stop):
+python3 run_p3.py --live -o submission.csv
+
+# Single pull + run (cron-friendly):
+python3 run_p3.py --live --live-once -o submission.csv
+
+# Tune polling / window size:
+python3 run_p3.py --live --live-interval 15 --live-klines 600 --live-trades 1000 -o submission.csv
+```
+
+**Endpoints:** default is `https://api.binance.com/api/v3`. If you see **HTTP 451** (region), try Binance US (or another jurisdiction that matches your IP):
+
+```bash
+export BINANCE_SPOT_API=https://api.binance.us/api/v3
+python3 run_p3.py --live --live-once -o submission.csv
+```
+
+**TLS:** the client uses **`certifi`** and respects **`SSL_CERT_FILE`** / **`REQUESTS_CA_BUNDLE`** for corporate proxies. Only if you know the risk: **`BINANCE_INSECURE_SSL=1`** disables certificate verification (debug / broken CA stores only).
+
+**Caveat:** public trades have **no real wallet IDs**; we assign **synthetic** `wallet_id` buckets. Wallet-graph heuristics are weaker than on the official synthetic pack; bar/price/peg/IF-style signals still run.
+
+On a typical laptop the full 8-pair run is **~25–35s** with ML layers enabled (extra LOF + boosting fit per run). A **live** cycle is usually **~15–25s** (network + same detectors on the last **N** minutes of data).
+
+### Historical Binance backfill (not only the live window)
+
+``--live`` / ``--dual`` only pull the **latest** bars and trades (up to **1000** 1m candles and **1000** agg trades per symbol per cycle). To populate **days** of history into the same folder layout as the student pack, run:
+
+```bash
+export BINANCE_SPOT_API=https://api.binance.us/api/v3   # if api.binance.com returns 451
+
+python3 scripts/fetch_binance_history.py --days 7 --data-root data/binance-hist
+# or: make fetch-hist ARGS='--days 7'
+
+python3 run_p3.py --data-root data/binance-hist -o submission_from_binance.csv
+```
+
+Use ``--max-trades`` (cap per symbol; default 250000) and ``--pause`` if you hit rate limits. Then in the dashboard, set **Primary** to ``submission_from_binance.csv`` for the long-history run, and optionally **Second** to ``submission_live.csv`` for the short live snapshot.
+
+### Both at once (student pack + Binance in parallel)
+
+One command runs the **offline** pipeline on your CSVs and the **live** fetch+pipeline in **two threads**, then writes **two files** (wall time ≈ max of the two branches, not the sum):
+
+```bash
+python3 run_p3.py --dual
+# → submission_offline.csv (default) + submission_live.csv
+
+python3 run_p3.py --dual -o my_pack.csv --output-live my_live.csv
+```
+
+In the dashboard, set **Primary** to `submission_offline.csv` (or your `-o` path) and **Second CSV** to `submission_live.csv` — you get **two tabs** and auto-refresh can update **both** files each cycle.
+
+To refresh both on a schedule, wrap in a shell loop or use two terminals (`--dual` periodically vs. `--live` + offline on different intervals).
 
 ## Example testing scenario (efficiency + smoke checks)
 
@@ -80,8 +157,8 @@ This does **not** need labels: it measures **how fast** you process the real CSV
 ```bash
 cd /path/to/BITS
 source .venv/bin/activate   # if you use the venv
-python scripts/benchmark_p3.py --runs 3
-# or: python scripts/benchmark_p3.py --data-root /path/to/student-pack --runs 3
+python3 scripts/benchmark_p3.py --runs 3
+# or: python3 scripts/benchmark_p3.py --data-root /path/to/student-pack --runs 3
 ```
 
 What it does:
@@ -92,10 +169,23 @@ What it does:
 
 Exit code **1** if any smoke check fails.
 
+## Dashboard (UI)
+
+Explore **`submission.csv`** in the browser with Streamlit:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt   # includes streamlit
+python3 -m streamlit run dashboard/app.py
+# or: make dashboard
+```
+
+Use the sidebar to point at another CSV path if needed. **Auto-refresh is on by default** (polls the CSV every few seconds) so you do **not** need to reload the browser when **`submission.csv`** changes; turn it off for a static file. Pair with **`python3 run_p3.py --live -o submission.csv`** for continuous updates. Charts: counts by **symbol**, **violation_type**, optional **`ml_rank_p`** histogram, flags per **day**, plus a filterable table (filters persist across refreshes).
+
 ## Tuning before submit
 
-- Edit **`p3/config.py`**: `MAX_SUBMISSION_ROWS`, `PEG_BREAK_ABS`, `ROUND_TRIP_*`, `STRUCT_*`, `IF_CONTAMINATION`, `IF_SYMBOLS`, **`USE_ENSEMBLE_ANOMALY`**, **`USE_ML_RERANKER`**, **`TRUSTED_DETECTORS`**, **`ML_*`**.  
-- Re-enable **BATUSDT hot-hour** surfacing by importing `detect_bat_hot_hours` in `p3/pipeline.py` (removed by default — noisy without a confirmation rule).  
+- Edit **`p3/config.py`**: `MAX_SUBMISSION_ROWS`, `PEG_BREAK_ABS`, **`BAT_HOUR_VOLUME_MULT`**, **`MAJOR_PAIR_HOD_MULT`**, **`MAJOR_PAIR_MIN_NOTIONAL_USDT`**, `ROUND_TRIP_*`, `STRUCT_*`, `IF_CONTAMINATION`, `IF_SYMBOLS`, **`USE_ENSEMBLE_ANOMALY`**, **`USE_ML_RERANKER`**, **`TRUSTED_DETECTORS`**, **`ML_*`**.  
+- **BATUSDT hot-hour** and **BTC/ETH HOD spikes** are on by default; raise thresholds if they add too many rows before the ML cap.  
 - Add **`remarks`**; graders use them for partial credit when `violation_type` is off.
 
 ## Layout
@@ -104,7 +194,7 @@ Exit code **1** if any smoke check fails.
 |------|---------|
 | `p3/io.py` | Load market/trades; resolve `Volume <BASE>` column names |
 | `p3/features.py` | Join trades to bars; rolling qty z-score; wallet frequency |
-| `p3/detectors/rules.py` | Peg / USDC wash-at-peg |
+| `p3/detectors/rules.py` | Peg, USDC wash-at-peg, BATUSDT hot hours, BTC/ETH HOD notional spike |
 | `p3/detectors/wallet_patterns.py` | Wallet-centric manipulation + AML heuristics |
 | `p3/detectors/market_patterns.py` | Bar-level pump/dump, BTC divergence, spoof proxy |
 | `p3/detectors/isolation.py` | IsolationForest recall layer |
@@ -113,7 +203,11 @@ Exit code **1** if any smoke check fails.
 | `p3/ml/ranker.py` | HistGradientBoosting pseudo-label re-rank |
 | `p3/pipeline.py` | Orchestration + corroboration + ML re-rank |
 | `run_p3.py` | CLI |
+| `Makefile` | `make run` / `make dual` / `make dashboard` / `make fetch-hist` (uses `.venv/bin/python` if present) |
+| `scripts/fetch_binance_history.py` | Paginated historical klines + agg trades → `data/binance-hist/` |
+| `scripts/eda_pack_stats.py` | Vectorised EDA report: notionals, peg, BAT hours, major-pair HOD (`make eda-stats`) |
 | `scripts/benchmark_p3.py` | Example timed run + submission smoke tests |
+| `dashboard/app.py` | Streamlit UI for `submission.csv` |
 
 ## Disclaimer
 
