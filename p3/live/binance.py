@@ -23,13 +23,71 @@ import pandas as pd
 
 from p3.io import normalize_market_dataframe, normalize_trades_dataframe
 
-# Default: global Binance. If you get HTTP 451 (region), set e.g.
-# ``export BINANCE_SPOT_API=https://api.binance.us/api/v3`` (same paths; symbol set may differ).
+# Shown for docs / legacy imports; live requests use ``binance_spot_get`` (451-aware fallback).
 BINANCE_SPOT = os.environ.get(
     "BINANCE_SPOT_API",
     "https://api.binance.com/api/v3",
 ).rstrip("/")
 DEFAULT_UA = "BITS-p3-live/1.0"
+
+_resolved_spot_base: str | None = None
+
+
+def _spot_bases() -> list[str]:
+    """If ``BINANCE_SPOT_API`` is set, only that base. Else try .com then .us (451 / geo)."""
+    env = os.environ.get("BINANCE_SPOT_API", "").strip().rstrip("/")
+    if env:
+        return [env]
+    return [
+        "https://api.binance.com/api/v3",
+        "https://api.binance.us/api/v3",
+    ]
+
+
+def binance_spot_get(path_with_query: str, *, timeout: float = 45.0) -> object:
+    """
+    GET ``{base}/{path}`` with automatic fallback when ``BINANCE_SPOT_API`` is unset:
+    HTTP **451** or connection errors try the next base (typically .com → .us).
+    """
+    global _resolved_spot_base
+    rel = path_with_query.lstrip("/")
+    bases = _spot_bases()
+    multi = len(bases) > 1
+
+    if _resolved_spot_base and _resolved_spot_base in bases:
+        url = f"{_resolved_spot_base}/{rel}"
+        try:
+            return _http_get_json(url, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            if e.code == 451 and multi:
+                _resolved_spot_base = None
+            else:
+                raise
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if multi:
+                _resolved_spot_base = None
+            else:
+                raise
+
+    last_err: BaseException | None = None
+    for base in bases:
+        url = f"{base}/{rel}"
+        try:
+            out = _http_get_json(url, timeout=timeout)
+            _resolved_spot_base = base
+            return out
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code == 451 and multi and base != bases[-1]:
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            last_err = e
+            if multi and base != bases[-1]:
+                continue
+            raise
+    assert last_err is not None
+    raise last_err
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -64,8 +122,7 @@ def fetch_klines_raw(symbol: str, *, limit: int = 500) -> list[list]:
     if limit > 1000:
         limit = 1000
     q = f"symbol={symbol}&interval=1m&limit={limit}"
-    url = f"{BINANCE_SPOT}/klines?{q}"
-    raw = _http_get_json(url)
+    raw = binance_spot_get(f"klines?{q}")
     if not isinstance(raw, list):
         raise ValueError(f"Unexpected klines response for {symbol}")
     return raw
@@ -75,8 +132,7 @@ def fetch_agg_trades_raw(symbol: str, *, limit: int = 1000) -> list[dict]:
     if limit > 1000:
         limit = 1000
     q = f"symbol={symbol}&limit={limit}"
-    url = f"{BINANCE_SPOT}/aggTrades?{q}"
-    raw = _http_get_json(url)
+    raw = binance_spot_get(f"aggTrades?{q}")
     if not isinstance(raw, list):
         raise ValueError(f"Unexpected aggTrades response for {symbol}")
     return raw

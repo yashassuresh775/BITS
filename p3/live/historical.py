@@ -13,9 +13,8 @@ from pathlib import Path
 from typing import Iterable
 
 from p3.live.binance import (
-    BINANCE_SPOT,
-    _http_get_json,
     agg_trades_to_trades_dataframe,
+    binance_spot_get,
     klines_to_market_dataframe,
 )
 
@@ -44,8 +43,7 @@ def fetch_klines_historical(
             "limit": "1000",
         }
         q = urllib.parse.urlencode(params)
-        url = f"{BINANCE_SPOT}/klines?{q}"
-        chunk = _http_get_json(url)
+        chunk = binance_spot_get(f"klines?{q}")
         if not isinstance(chunk, list) or not chunk:
             break
         for k in chunk:
@@ -85,8 +83,7 @@ def fetch_agg_trades_historical(
             "limit": "1000",
         }
         q = urllib.parse.urlencode(params)
-        url = f"{BINANCE_SPOT}/aggTrades?{q}"
-        chunk = _http_get_json(url)
+        chunk = binance_spot_get(f"aggTrades?{q}")
         if not isinstance(chunk, list) or not chunk:
             break
         out.extend(chunk)

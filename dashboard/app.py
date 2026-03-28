@@ -274,8 +274,8 @@ def main() -> None:
         live_trades = 1000
         if primary_mode == "Live Binance":
             st.markdown(
-                "Same API stack as `run_p3.py --live`. If you see errors (e.g. HTTP 451), set "
-                "`BINANCE_SPOT_API` on the host or use **Static CSV**."
+                "Same API stack as `run_p3.py --live`. If `binance.com` is geo-blocked (HTTP 451), "
+                "the app retries **binance.us** automatically. Set `BINANCE_SPOT_API` in secrets only if you need a custom host."
             )
             live_klines = st.number_input(
                 "Klines / symbol",
@@ -412,7 +412,7 @@ def main() -> None:
         if primary_mode == "Live Binance":
             st.warning(
                 "No rows from live run (pipeline returned empty or fetch failed). "
-                "Check Binance reachability / `BINANCE_SPOT_API`, or switch **Primary source** to **Static CSV**."
+                "Check network / symbols on your venue, set `BINANCE_SPOT_API` if needed, or switch **Primary source** to **Static CSV**."
             )
         else:
             st.warning(

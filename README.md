@@ -107,7 +107,7 @@ python3 run_p3.py --live --live-once -o submission.csv
 python3 run_p3.py --live --live-interval 15 --live-klines 600 --live-trades 1000 -o submission.csv
 ```
 
-**Endpoints:** default is `https://api.binance.com/api/v3`. If you see **HTTP 451** (region), try Binance US (or another jurisdiction that matches your IP):
+**Endpoints:** without **`BINANCE_SPOT_API`**, the client tries **`api.binance.com`**, then **`api.binance.us`** on HTTP **451** (or connection errors). Pin a single host if you want:
 
 ```bash
 export BINANCE_SPOT_API=https://api.binance.us/api/v3
@@ -125,7 +125,7 @@ On a typical laptop the full 8-pair run is **~25–35s** with ML layers enabled 
 ``--live`` / ``--dual`` only pull the **latest** bars and trades (up to **1000** 1m candles and **1000** agg trades per symbol per cycle). To populate **days** of history into the same folder layout as the student pack, run:
 
 ```bash
-export BINANCE_SPOT_API=https://api.binance.us/api/v3   # if api.binance.com returns 451
+# Optional: export BINANCE_SPOT_API=... to pin a host (auto .com→.us fallback applies if unset)
 
 python3 scripts/fetch_binance_history.py --days 7 --data-root data/binance-hist
 # or: make fetch-hist ARGS='--days 7'
@@ -186,7 +186,7 @@ python3 -m streamlit run dashboard/app.py
 
 `submission.csv` at repo root is **gitignored**, so that path is often missing on the server. The dashboard supports:
 
-1. **Live Binance** (default) — fetches and runs the pipeline on each refresh (no upload). If Binance blocks the region (e.g. HTTP 451), set **`BINANCE_SPOT_API`** in Cloud secrets or app settings to a reachable endpoint, or use static options below.  
+1. **Live Binance** (default) — fetches and runs the pipeline on each refresh (no upload). If `api.binance.com` returns **HTTP 451**, the client automatically retries **`api.binance.us`** (same REST paths). Override with **`BINANCE_SPOT_API`** in env or Streamlit secrets if you need another host.  
 2. **Static CSV** — path field, **`PRIMARY_SUBMISSION_URL`** / **`SECOND_SUBMISSION_URL`** in Secrets (see **`.streamlit/secrets.toml.example`**), optional **Advanced → upload**, or committed **`dashboard/sample_submission.csv`** (written by `run_p3.py` unless **`--no-dashboard-sample`**).
 
 **Cloud settings:** set **Main file path** to **`dashboard/app.py`**. **Python dependencies** come from repo-root **`requirements.txt`**.
