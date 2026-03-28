@@ -31,6 +31,8 @@ BINANCE_SPOT = os.environ.get(
 DEFAULT_UA = "BITS-p3-live/1.0"
 
 _resolved_spot_base: str | None = None
+# After Binance is exhausted once, stay on MEXC for this process (Streamlit autorefresh).
+_live_use_mexc: bool = False
 
 _BINANCE_US = "https://api.binance.us/api/v3"
 _BINANCE_COM = "https://api.binance.com/api/v3"
@@ -131,20 +133,56 @@ def _volume_base_column(symbol: str) -> str:
 
 
 def fetch_klines_raw(symbol: str, *, limit: int = 500) -> list[list]:
+    global _live_use_mexc
     if limit > 1000:
         limit = 1000
     q = f"symbol={symbol}&interval=1m&limit={limit}"
-    raw = binance_spot_get(f"klines?{q}")
+    if _live_use_mexc:
+        from p3.live import mexc
+
+        raw = mexc.fetch_klines_normalized(symbol, limit=limit)
+    else:
+        try:
+            raw = binance_spot_get(f"klines?{q}")
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
+            from p3.live import mexc
+
+            try:
+                raw = mexc.fetch_klines_normalized(symbol, limit=limit)
+                _live_use_mexc = True
+            except Exception as mexc_e:  # noqa: BLE001
+                raise RuntimeError(
+                    f"Klines failed for {symbol} (Binance venues exhausted, then MEXC): "
+                    f"binance={e!r}; mexc={mexc_e!r}"
+                ) from mexc_e
     if not isinstance(raw, list):
         raise ValueError(f"Unexpected klines response for {symbol}")
     return raw
 
 
 def fetch_agg_trades_raw(symbol: str, *, limit: int = 1000) -> list[dict]:
+    global _live_use_mexc
     if limit > 1000:
         limit = 1000
     q = f"symbol={symbol}&limit={limit}"
-    raw = binance_spot_get(f"aggTrades?{q}")
+    if _live_use_mexc:
+        from p3.live import mexc
+
+        raw = mexc.fetch_agg_trades_normalized(symbol, limit=limit)
+    else:
+        try:
+            raw = binance_spot_get(f"aggTrades?{q}")
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
+            from p3.live import mexc
+
+            try:
+                raw = mexc.fetch_agg_trades_normalized(symbol, limit=limit)
+                _live_use_mexc = True
+            except Exception as mexc_e:  # noqa: BLE001
+                raise RuntimeError(
+                    f"Agg trades failed for {symbol} (Binance venues exhausted, then MEXC): "
+                    f"binance={e!r}; mexc={mexc_e!r}"
+                ) from mexc_e
     if not isinstance(raw, list):
         raise ValueError(f"Unexpected aggTrades response for {symbol}")
     return raw
@@ -227,6 +265,13 @@ def fetch_live_frames(
             out[sym] = fetch_symbol_frames(
                 sym, kline_limit=kline_limit, trades_limit=trades_limit
             )
-        except (urllib.error.URLError, urllib.error.HTTPError, ValueError, KeyError) as e:
-            raise RuntimeError(f"Binance fetch failed for {sym}: {e}") from e
+        except (
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as e:
+            raise RuntimeError(f"Live market fetch failed for {sym}: {e}") from e
     return out

@@ -255,7 +255,7 @@ def main() -> None:
     )
     st.title("BITS — Problem 3 submission explorer")
     st.caption(
-        "Default **Live Binance**: fetches public market data and runs the pipeline in-app (no upload). "
+        "Default **Live**: Binance public APIs, with **MEXC** fallback if Binance returns 451 from the host (e.g. Streamlit Cloud). "
         "Switch sidebar to **Static CSV** for local files, bundled sample, or a secret URL."
     )
 
@@ -274,8 +274,8 @@ def main() -> None:
         live_trades = 1000
         if primary_mode == "Live Binance":
             st.markdown(
-                "Same API stack as `run_p3.py --live`. Requests try **binance.us** first, then **binance.com** "
-                "(403/451 falls through). Set `BINANCE_SPOT_API` in secrets only to pin one host."
+                "Same detectors as `run_p3.py --live`. Tries **Binance** (US → … → .com), then **MEXC** public API "
+                "if Binance returns 451/403 (common from cloud IPs). Set `BINANCE_SPOT_API` only to pin Binance."
             )
             live_klines = st.number_input(
                 "Klines / symbol",
