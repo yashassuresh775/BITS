@@ -180,21 +180,18 @@ python3 -m streamlit run dashboard/app.py
 # or: make dashboard
 ```
 
-Use the sidebar to point at another CSV path if needed. **Auto-refresh is on by default** (polls the CSV every few seconds) so you do **not** need to reload the browser when **`submission.csv`** changes; turn it off for a static file. Pair with **`python3 run_p3.py --live -o submission.csv`** for continuous updates. Charts: counts by **symbol**, **violation_type**, optional **`ml_rank_p`** histogram, flags per **day**, plus a filterable table (filters persist across refreshes).
+**Default primary source** is **Live Binance** (public REST + in-app pipeline — same stack as **`run_p3.py --live`**); no CSV upload required. Switch the sidebar to **Static CSV** for a local path, secret URL, optional upload (under **Advanced**), or bundled **`dashboard/sample_submission.csv`**. **Auto-refresh** reruns the live fetch + pipeline or reloads files on an interval. Charts: **symbol**, **violation_type**, optional **`ml_rank_p`**, flags per **day**, filterable table.
 
 ### Streamlit Community Cloud (hosted)
 
-`submission.csv` is **gitignored**, so the deployed app does **not** ship your output file. The dashboard supports:
+`submission.csv` at repo root is **gitignored**, so that path is often missing on the server. The dashboard supports:
 
-1. **Upload primary CSV** (sidebar) — always works; best for demos and private results.  
-2. **Secrets URLs** — App → Settings → Secrets, TOML keys:
-   - `PRIMARY_SUBMISSION_URL` — HTTPS link to a **raw** CSV (same columns as `submission.csv`).  
-   - `SECOND_SUBMISSION_URL` — optional second file for the compare tab.  
-   See **`.streamlit/secrets.toml.example`**.
+1. **Live Binance** (default) — fetches and runs the pipeline on each refresh (no upload). If Binance blocks the region (e.g. HTTP 451), set **`BINANCE_SPOT_API`** in Cloud secrets or app settings to a reachable endpoint, or use static options below.  
+2. **Static CSV** — path field, **`PRIMARY_SUBMISSION_URL`** / **`SECOND_SUBMISSION_URL`** in Secrets (see **`.streamlit/secrets.toml.example`**), optional **Advanced → upload**, or committed **`dashboard/sample_submission.csv`** (written by `run_p3.py` unless **`--no-dashboard-sample`**).
 
 **Cloud settings:** set **Main file path** to **`dashboard/app.py`**. **Python dependencies** come from repo-root **`requirements.txt`**.
 
-Example deployment: `https://yashassuresh775-bits-dashboardapp-49yjj9.streamlit.app/` — after each git push, Cloud rebuilds; use upload or secrets so the app has data.
+Example deployment: `https://yashassuresh775-bits-dashboardapp-49yjj9.streamlit.app/` — Live Binance works without shipping a CSV; use static options if the API is unreachable from the host.
 
 ## Tuning before submit
 

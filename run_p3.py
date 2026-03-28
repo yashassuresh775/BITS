@@ -14,6 +14,15 @@ from p3.live import fetch_live_frames
 from p3.pipeline import hits_to_submission, run_pipeline, run_pipeline_from_frames
 
 
+def _sync_dashboard_sample(repo: Path, sub, *, enabled: bool) -> None:
+    """Copy submission into dashboard/ so Streamlit Cloud can load it after commit (see dashboard fallback)."""
+    if not enabled:
+        return
+    dest = repo / "dashboard" / "sample_submission.csv"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    sub.to_csv(dest, index=False)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Problem 3 crypto anomaly hunt")
     parser.add_argument(
@@ -72,8 +81,14 @@ def main() -> None:
         metavar="PATH",
         help="With --dual: output path for the live branch (default: submission_live.csv).",
     )
+    parser.add_argument(
+        "--no-dashboard-sample",
+        action="store_true",
+        help="Do not write dashboard/sample_submission.csv (default: sync after each successful CSV write).",
+    )
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent
+    sync_sample = not args.no_dashboard_sample
     default_pack = repo / "data" / "student-pack"
 
     if args.output is None:
@@ -133,6 +148,7 @@ def main() -> None:
         if "offline" in results:
             sub_off, elapsed = results["offline"]
             sub_off.to_csv(args.output, index=False)
+            _sync_dashboard_sample(repo, sub_off, enabled=sync_sample)
             print(f"[dual/offline] Wrote {len(sub_off)} rows to {args.output} in {elapsed:.2f}s")
             if not sub_off.empty:
                 print(sub_off.head(5).to_string(index=False))
@@ -143,6 +159,8 @@ def main() -> None:
         if "live" in results:
             sub_lv, elapsed = results["live"]
             sub_lv.to_csv(args.output_live, index=False)
+            if "offline" not in results:
+                _sync_dashboard_sample(repo, sub_lv, enabled=sync_sample)
             print(
                 f"[dual/live] Wrote {len(sub_lv)} rows to {args.output_live} in {elapsed:.2f}s"
             )
@@ -174,6 +192,7 @@ def main() -> None:
                 sub = hits_to_submission(hits)
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 sub.to_csv(args.output, index=False)
+                _sync_dashboard_sample(repo, sub, enabled=sync_sample)
                 elapsed = time.perf_counter() - t0
                 print(
                     f"[live] Wrote {len(sub)} rows to {args.output} in {elapsed:.2f}s "
@@ -211,6 +230,7 @@ def main() -> None:
     sub = hits_to_submission(hits)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     sub.to_csv(args.output, index=False)
+    _sync_dashboard_sample(repo, sub, enabled=sync_sample)
     print(f"Wrote {len(sub)} rows to {args.output} in {elapsed:.2f}s")
     if not sub.empty:
         print(sub.head(10).to_string(index=False))

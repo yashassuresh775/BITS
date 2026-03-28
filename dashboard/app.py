@@ -3,15 +3,19 @@ Problem 3 submission explorer — run from repo root:
 
   streamlit run dashboard/app.py
 
-On **Streamlit Community Cloud**, `submission.csv` is usually not in the repo (gitignored).
-Use **Upload CSV** in the sidebar or set **Secrets** URLs (see README / `.streamlit/secrets.toml.example`).
+**Default:** primary data is **live Binance** (public REST + same pipeline as ``run_p3.py --live``) — no CSV upload.
+For offline snapshots use **Static CSV** (path, optional Secrets URL, or bundled ``dashboard/sample_submission.csv``).
+Optional CSV upload lives under **Advanced** in the sidebar.
 """
 
 from __future__ import annotations
 
 import hashlib
 import io
+import os
 import re
+import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -25,7 +29,10 @@ except ImportError:
     st_autorefresh = None  # type: ignore[misc, assignment]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 DEFAULT_CSV = REPO_ROOT / "submission.csv"
+BUNDLED_SAMPLE_CSV = REPO_ROOT / "dashboard" / "sample_submission.csv"
 ML_P_RE = re.compile(r"ml_rank_p=([\d.]+)")
 REQUIRED_COLS = ("symbol", "date", "trade_id", "violation_type", "remarks")
 
@@ -87,6 +94,40 @@ def load_submission_bytes(content: bytes, _cache_key: str) -> pd.DataFrame:
 def load_submission_url(url: str, _url_key: str) -> pd.DataFrame:
     df = pd.read_csv(url)
     return _validate_and_enrich_submission(df)
+
+
+def _apply_binance_env_from_secrets() -> None:
+    """Map optional Streamlit secrets into ``os.environ`` so ``p3.live.binance`` sees them on Cloud."""
+    for key in ("BINANCE_SPOT_API", "BINANCE_INSECURE_SSL", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+        if os.environ.get(key, "").strip():
+            continue
+        try:
+            v = st.secrets[key]
+            s = str(v).strip()
+            if s:
+                os.environ[key] = s
+        except (KeyError, FileNotFoundError, TypeError, RuntimeError):
+            pass
+
+
+def run_live_binance_submission(kline_limit: int, trades_limit: int) -> tuple[pd.DataFrame, str | None]:
+    """Fetch Binance public data and run the pack pipeline (same path as ``run_p3.py --live``). Not cached — each rerun refreshes."""
+    try:
+        _apply_binance_env_from_secrets()
+        from p3.config import SYMBOLS
+        from p3.live import fetch_live_frames
+        from p3.pipeline import hits_to_submission, run_pipeline_from_frames
+
+        frames = fetch_live_frames(
+            list(SYMBOLS),
+            kline_limit=int(kline_limit),
+            trades_limit=int(trades_limit),
+        )
+        hits = run_pipeline_from_frames(frames)
+        sub = hits_to_submission(hits)
+        return _validate_and_enrich_submission(sub), None
+    except Exception as e:  # noqa: BLE001 — show any API / pipeline error in UI
+        return pd.DataFrame(), str(e)
 
 
 def render_submission_panel(
@@ -214,7 +255,8 @@ def main() -> None:
     )
     st.title("BITS — Problem 3 submission explorer")
     st.caption(
-        "Local: point at `submission.csv` on disk. **Streamlit Cloud:** upload a CSV or set **Secrets** URLs (README)."
+        "Default **Live Binance**: fetches public market data and runs the pipeline in-app (no upload). "
+        "Switch sidebar to **Static CSV** for local files, bundled sample, or a secret URL."
     )
 
     secret_primary = _secret_str("PRIMARY_SUBMISSION_URL")
@@ -222,33 +264,70 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Data")
-        st.markdown(
-            "**Hosted (Streamlit Cloud):** `submission.csv` is not in git — "
-            "**upload** your file here or set `PRIMARY_SUBMISSION_URL` in app secrets."
+        primary_mode = st.radio(
+            "Primary source",
+            ["Live Binance", "Static CSV"],
+            horizontal=True,
+            help="Live = real-time REST + pipeline each refresh. Static = file path, URL secret, or optional upload.",
         )
-        upload_primary = st.file_uploader(
-            "Upload primary CSV",
-            type=["csv"],
-            key="upload_primary",
-            help="Highest priority: use this instead of path / secret URL.",
-        )
-        upload_second = st.file_uploader(
-            "Upload second CSV (optional)",
-            type=["csv"],
-            key="upload_second",
-            help="Compare tab: overrides second path / secret URL.",
-        )
+        live_klines = 1000
+        live_trades = 1000
+        if primary_mode == "Live Binance":
+            st.markdown(
+                "Same API stack as `run_p3.py --live`. If you see errors (e.g. HTTP 451), set "
+                "`BINANCE_SPOT_API` on the host or use **Static CSV**."
+            )
+            live_klines = st.number_input(
+                "Klines / symbol",
+                min_value=100,
+                max_value=1000,
+                value=1000,
+                step=100,
+                help="1m candles per symbol (max 1000).",
+            )
+            live_trades = st.number_input(
+                "Agg trades / symbol",
+                min_value=100,
+                max_value=1000,
+                value=1000,
+                step=100,
+            )
+            st.caption(
+                "Each refresh reruns fetch + full pipeline (can take 20–60s). "
+                "Set **Refresh every** below to at least that if you see overlapping runs."
+            )
+        else:
+            st.markdown(
+                "Uses **path** below, then `PRIMARY_SUBMISSION_URL` secret, then optional **upload** "
+                "in Advanced, then `dashboard/sample_submission.csv` if the path file is missing."
+            )
+        upload_primary = None
+        upload_second = None
+        with st.expander("Advanced: CSV upload (optional)", expanded=False):
+            st.caption("Overrides static path/URL when a file is selected. Ignored when primary is **Live Binance**.")
+            upload_primary = st.file_uploader(
+                "Upload primary CSV",
+                type=["csv"],
+                key="upload_primary",
+                help="Only used for **Static CSV** primary mode.",
+            )
+            upload_second = st.file_uploader(
+                "Upload second CSV (compare tab)",
+                type=["csv"],
+                key="upload_second",
+            )
         if secret_primary:
-            st.caption("Secrets: primary URL is set.")
+            st.caption("Secrets: `PRIMARY_SUBMISSION_URL` is set (used in Static CSV mode).")
         if secret_second:
-            st.caption("Secrets: second URL is set.")
+            st.caption("Secrets: `SECOND_SUBMISSION_URL` is set.")
         csv_path = st.text_input(
-            "Primary submission CSV path",
+            "Primary CSV path (Static mode)",
             value=str(DEFAULT_CSV),
-            help="Local path when not using upload or PRIMARY_SUBMISSION_URL.",
+            disabled=(primary_mode == "Live Binance"),
+            help="Ignored when primary is Live Binance.",
         )
         csv_path_b = st.text_input(
-            "Second CSV path (optional — compare with live)",
+            "Second CSV path (optional — compare tab)",
             value="",
             placeholder="submission_live.csv",
             help="Local path when not using second upload or SECOND_SUBMISSION_URL.",
@@ -287,10 +366,15 @@ def main() -> None:
         else:
             st.sidebar.warning("Install `streamlit-autorefresh` for live mode (`pip install -r requirements.txt`).")
 
-    # Primary: upload > secret URL > local path
+    # Primary: Live Binance | upload > secret URL > local path > bundled sample
     df_a = pd.DataFrame()
     primary_src = ""
-    if upload_primary is not None:
+    if primary_mode == "Live Binance":
+        df_a, live_err = run_live_binance_submission(live_klines, live_trades)
+        primary_src = f"live_binance:t={time.time():.3f}|n={len(df_a)}"
+        if live_err:
+            st.error(f"Live Binance pipeline failed: {live_err}")
+    elif upload_primary is not None:
         raw_p = upload_primary.getvalue()
         ck_p = _bytes_cache_key(raw_p, upload_primary.name or "primary.csv")
         df_a = load_submission_bytes(raw_p, ck_p)
@@ -302,6 +386,11 @@ def main() -> None:
         mtime_a = submission_file_mtime(csv_path)
         df_a = load_submission(csv_path, mtime_a)
         primary_src = f"path:{Path(csv_path).expanduser().resolve()}|{mtime_a}"
+        if df_a.empty and BUNDLED_SAMPLE_CSV.is_file():
+            sp = str(BUNDLED_SAMPLE_CSV)
+            mtime_s = submission_file_mtime(sp)
+            df_a = load_submission(sp, mtime_s)
+            primary_src = f"path:{BUNDLED_SAMPLE_CSV.resolve()}|{mtime_s}"
 
     path_b = csv_path_b.strip()
     df_b = pd.DataFrame()
@@ -320,14 +409,24 @@ def main() -> None:
         second_src = f"path:{Path(path_b).expanduser().resolve()}|{mtime_b}"
 
     if df_a.empty:
-        st.warning(
-            "No primary data loaded. On **Streamlit Cloud**, use **Upload primary CSV** "
-            "or add `PRIMARY_SUBMISSION_URL` in **App settings → Secrets** (see README). "
-            f"Locally, run `python3 run_p3.py -o submission.csv` or fix the path. Default: `{DEFAULT_CSV}`"
-        )
+        if primary_mode == "Live Binance":
+            st.warning(
+                "No rows from live run (pipeline returned empty or fetch failed). "
+                "Check Binance reachability / `BINANCE_SPOT_API`, or switch **Primary source** to **Static CSV**."
+            )
+        else:
+            st.warning(
+                "No primary data loaded. Commit `dashboard/sample_submission.csv`, set **Static CSV** path, "
+                "add `PRIMARY_SUBMISSION_URL` in Secrets, or use **Advanced → upload**. "
+                f"Default path: `{DEFAULT_CSV}`"
+            )
         return
 
-    if live and st_autorefresh is not None:
+    if primary_mode == "Live Binance":
+        st.success(
+            f"**Live Binance** — {len(df_a)} rows (auto-refresh every **{interval_s}s** reloads fetch + pipeline)."
+        )
+    elif live and st_autorefresh is not None:
         st.success(
             f"**Auto-refresh:** every **{interval_s}s** — no browser reload needed. "
             "Symbol filters reset when the file changes if the sidebar toggle is on."
