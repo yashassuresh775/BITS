@@ -116,8 +116,35 @@ def _apply_binance_env_from_secrets() -> None:
             pass
 
 
-def run_live_binance_submission(kline_limit: int, trades_limit: int) -> tuple[pd.DataFrame, str | None]:
-    """Fetch Binance public data and run the pack pipeline (same path as ``run_p3.py --live``). Not cached — each rerun refreshes."""
+def _prefer_okx_on_streamlit_cloud() -> None:
+    """Skip slow Binance 451 retries on Community Cloud (``*.streamlit.app``) unless user set ``LIVE_SPOT_VENUE``."""
+    _apply_binance_env_from_secrets()
+    if os.environ.get("LIVE_SPOT_VENUE", "").strip():
+        return
+    try:
+        ctx = getattr(st, "context", None)
+        if ctx is None:
+            return
+        h = getattr(ctx, "headers", None)
+        if h is None:
+            return
+        host = (h.get("Host") or h.get("host") or "").lower()
+        if "streamlit.app" in host:
+            os.environ["LIVE_SPOT_VENUE"] = "okx"
+    except (AttributeError, TypeError, RuntimeError):
+        pass
+
+
+def _live_env_fingerprint() -> str:
+    return "|".join(
+        [
+            os.environ.get("LIVE_SPOT_VENUE", "").strip(),
+            os.environ.get("BINANCE_SPOT_API", "").strip()[:120],
+        ]
+    )
+
+
+def _run_live_binance_submission_impl(kline_limit: int, trades_limit: int) -> tuple[pd.DataFrame, str | None]:
     try:
         _apply_binance_env_from_secrets()
         from p3.config import SYMBOLS
@@ -134,6 +161,16 @@ def run_live_binance_submission(kline_limit: int, trades_limit: int) -> tuple[pd
         return _validate_and_enrich_submission(sub), None
     except Exception as e:  # noqa: BLE001 — show any API / pipeline error in UI
         return pd.DataFrame(), str(e)
+
+
+@st.cache_data(ttl=90, show_spinner="Live fetch + pipeline (first run; cached ~90s if enabled)…")
+def run_live_binance_submission_cached(
+    kline_limit: int,
+    trades_limit: int,
+    _env_fp: str,
+) -> tuple[pd.DataFrame, str | None]:
+    """Same as uncached path; TTL avoids re-running ML on every autorefresh tick."""
+    return _run_live_binance_submission_impl(kline_limit, trades_limit)
 
 
 def render_submission_panel(
@@ -259,6 +296,7 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
+    _prefer_okx_on_streamlit_cloud()
     st.title("BITS — Problem 3 submission explorer")
     st.caption(
         "Default **Live**: tries **Binance**, then **MEXC**, then **OKX** so hosted apps still get market data when one venue blocks. "
@@ -276,32 +314,41 @@ def main() -> None:
             horizontal=True,
             help="Live = real-time REST + pipeline each refresh. Static = file path, URL secret, or optional upload.",
         )
-        live_klines = 1000
-        live_trades = 1000
+        live_klines = 400
+        live_trades = 400
+        use_live_cache = True
         if primary_mode == "Live Binance":
             st.markdown(
                 "Same detectors as `run_p3.py --live`. Live data: **Binance** (several hosts) → **MEXC** → **OKX** "
-                "(public REST, no key). Secrets: `BINANCE_SPOT_API` pins Binance; `LIVE_SPOT_VENUE=okx` (or `mexc`) "
-                "forces one venue."
+                "(public REST, no key). On **streamlit.app**, **OKX** is chosen by default (faster than Binance 451 retries). "
+                "Secrets: `LIVE_SPOT_VENUE`, `BINANCE_SPOT_API`."
             )
+            use_live_cache = st.toggle(
+                "Cache live pipeline (~90s)",
+                value=True,
+                help="Reuses the last successful run for 90s so auto-refresh does not redo fetch+ML every few seconds.",
+            )
+            if use_live_cache and st.button("Clear live cache", help="Force a full refetch on next run."):
+                run_live_binance_submission_cached.clear()
+                st.rerun()
             live_klines = st.number_input(
                 "Klines / symbol",
                 min_value=100,
                 max_value=1000,
-                value=1000,
-                step=100,
-                help="1m candles per symbol (max 1000).",
+                value=400,
+                step=50,
+                help="Smaller = faster load (default 400). Max 1000.",
             )
             live_trades = st.number_input(
                 "Agg trades / symbol",
                 min_value=100,
                 max_value=1000,
-                value=1000,
-                step=100,
+                value=400,
+                step=50,
+                help="Smaller = faster (default 400).",
             )
             st.caption(
-                "Each refresh reruns fetch + full pipeline (can take 20–60s). "
-                "Set **Refresh every** below to at least that if you see overlapping runs."
+                "First live run is often **30–90s** (8 symbols + ML). Enable cache + set **Refresh every** ≥ **45s** to avoid overlap."
             )
         else:
             st.markdown(
@@ -347,11 +394,12 @@ def main() -> None:
         )
         interval_s = st.slider(
             "Refresh every (seconds)",
-            min_value=2,
-            max_value=120,
-            value=5,
-            step=1,
+            min_value=10,
+            max_value=300,
+            value=45,
+            step=5,
             disabled=not live,
+            help="Live pipeline is heavy; 45s+ avoids overlapping runs. Use **Cache live pipeline** for snappy refreshes.",
         )
         st.caption(f"Last run: **{datetime.now().strftime('%H:%M:%S')}**")
         st.divider()
@@ -377,7 +425,14 @@ def main() -> None:
     df_a = pd.DataFrame()
     primary_src = ""
     if primary_mode == "Live Binance":
-        df_a, live_err = run_live_binance_submission(live_klines, live_trades)
+        if use_live_cache:
+            df_a, live_err = run_live_binance_submission_cached(
+                int(live_klines),
+                int(live_trades),
+                _live_env_fingerprint(),
+            )
+        else:
+            df_a, live_err = _run_live_binance_submission_impl(int(live_klines), int(live_trades))
         primary_src = f"live_binance:t={time.time():.3f}|n={len(df_a)}"
         if live_err:
             st.error(f"Live pipeline failed: {live_err}")
@@ -447,8 +502,9 @@ def main() -> None:
                 f"**Bundled snapshot** — {len(df_a)} rows (saved CSV from the repo; switch to **Static CSV** or fix live fetch)."
             )
         else:
+            cache_note = " (90s cache on)" if use_live_cache else " (cache off — every refresh reruns ML)"
             st.success(
-                f"**Live pipeline** — {len(df_a)} rows (auto-refresh every **{interval_s}s**; Binance / MEXC / OKX public data)."
+                f"**Live pipeline** — {len(df_a)} rows · refresh **{interval_s}s**{cache_note} · Binance / MEXC / OKX."
             )
     elif live and st_autorefresh is not None:
         st.success(

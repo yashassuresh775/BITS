@@ -180,13 +180,13 @@ python3 -m streamlit run dashboard/app.py
 # or: make dashboard
 ```
 
-**Default primary source** is **Live Binance** (public REST + in-app pipeline — same stack as **`run_p3.py --live`**); no CSV upload required. Switch the sidebar to **Static CSV** for a local path, secret URL, optional upload (under **Advanced**), or bundled **`dashboard/sample_submission.csv`**. **Auto-refresh** reruns the live fetch + pipeline or reloads files on an interval. Charts: **symbol**, **violation_type**, optional **`ml_rank_p`**, flags per **day**, filterable table.
+**Default primary source** is **Live** (public REST + in-app pipeline — same stack as **`run_p3.py --live`**); no CSV upload required. On **`*.streamlit.app`**, the app defaults to **OKX** and **caches** the live result **90s** so pages are much faster after the first run; lower default kline/trade counts and **45s** auto-refresh reduce overlap. Switch the sidebar to **Static CSV** for a local path, secret URL, optional upload (under **Advanced**), or bundled **`dashboard/sample_submission.csv`**. Charts: **symbol**, **violation_type**, optional **`ml_rank_p`**, flags per **day**, filterable table.
 
 ### Streamlit Community Cloud (hosted)
 
 `submission.csv` at repo root is **gitignored**, so that path is often missing on the server. The dashboard supports:
 
-1. **Live** (default) — runs the pipeline on each refresh (no upload). Tries **Binance** (several hosts), then **MEXC**, then **OKX** when earlier venues fail. Optional secrets: **`LIVE_SPOT_VENUE`** (`okx` / `mexc` / `binance`), **`BINANCE_SPOT_API`**.  
+1. **Live** (default) — public market data + pipeline (no upload). Venue order **Binance → MEXC → OKX** unless **`LIVE_SPOT_VENUE`** is set; hosted apps auto-prefer **OKX** for speed. Toggle **Cache live pipeline (~90s)** and **Clear live cache** in the sidebar. Secrets: **`LIVE_SPOT_VENUE`**, **`BINANCE_SPOT_API`**.  
 2. **Static CSV** — path field, **`PRIMARY_SUBMISSION_URL`** / **`SECOND_SUBMISSION_URL`** in Secrets (see **`.streamlit/secrets.toml.example`**), optional **Advanced → upload**, or committed **`dashboard/sample_submission.csv`** (written by `run_p3.py` unless **`--no-dashboard-sample`**).
 
 **Cloud settings:** set **Main file path** to **`dashboard/app.py`**. **Python dependencies** come from repo-root **`requirements.txt`**.
