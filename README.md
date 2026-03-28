@@ -1,8 +1,21 @@
-# BITS — Hackathon Problem 3 pipeline
+# BITS — Trade surveillance hackathon toolkit
 
-Python pipeline for the **crypto blind anomaly hunt** (Problem 3): load 8 pairs of **1-minute Binance OHLCV** + **synthetic trades** (`trader_id` = wallet), run layered detectors, and write **`submission.csv`** (`symbol`, `date`, `trade_id`, `violation_type`, `remarks`).
+This repo includes **Problem 3** (crypto — main points) plus optional **Problem 1** (order-book alerts) and **Problem 2** (SEC EDGAR + insider-style signals). Below, **Approach** refers to the **Problem 3** pipeline: load 8 pairs of **1-minute OHLCV** + **synthetic trades** (`wallet_id`), run layered detectors, and write **`submission.csv`** (`symbol`, `date`, `trade_id`, `violation_type`, `remarks`).
 
-## Approach (what we built)
+## Problems 1 & 2 (equity bonus)
+
+Place **`market_data.csv`**, **`ohlcv.csv`**, and **`trade_data.csv`** in one folder (e.g. `data/equity-data/`). A separate **`sec_id_map.csv`** is optional if **`ohlcv.csv`** already has **`ticker`** and **`sec_id`**.
+
+```bash
+python run_p1.py --data-root path/to/equity-data -o p1_alerts.csv
+python run_p2.py --data-root path/to/equity-data -o p2_signals.csv --start-date 2026-01-01 --end-date 2026-03-31
+```
+
+Problem 2 calls the SEC EDGAR API (`requests` in **`requirements.txt`**). Use `make p1 P1_ROOT=...` / `make p2 P2_ROOT=...` if your Makefile defines those targets.
+
+---
+
+## Problem 3 — Approach (what we built)
 
 1. **Rule layer (high precision)**  
    - **USDCUSDT `peg_break`**: `abs(price - 1.0) > 0.005`  
@@ -76,7 +89,7 @@ This matches the distributed pack even when filenames differ from `data_schema.m
 cd /path/to/BITS
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 **macOS note:** If the shell says `command not found: python`, use **`python3`** instead, or run **`source .venv/bin/activate`** first (the venv adds a `python` command). From the repo root you can also run **`make run`**, **`make dual`**, or **`make dashboard`** (the Makefile prefers **`.venv/bin/python`** when it exists).
@@ -232,7 +245,8 @@ Same app; set **Main file path** to **`dashboard/app.py`**. **`submission.csv`**
 | `p3/live/okx.py` | Public OKX v5 REST → same bar/trade shape as live pipeline |
 | `p3/live/binance.py` | Live fetch (OKX or single-host Binance); historical multi-host GET for backfill |
 | `run_p3.py` | CLI |
-| `Makefile` | `make run` / `make dual` / `make dashboard` / `make fetch-hist` (uses `.venv/bin/python` if present) |
+| `Makefile` | `make run` / `make p1` / `make p2` / `make dual` / `make dashboard` / `make fetch-hist` (uses `.venv/bin/python` if present) |
+| `run_p1.py` / `run_p2.py` | Equity Problem 1 & 2 CLIs → `p1_alerts.csv`, `p2_signals.csv` |
 | `scripts/fetch_binance_history.py` | Paginated historical klines + agg trades → `data/binance-hist/` |
 | `scripts/eda_pack_stats.py` | Vectorised EDA report: notionals, peg, BAT hours, major-pair HOD (`make eda-stats`) |
 | `scripts/benchmark_p3.py` | Example timed run + submission smoke tests |

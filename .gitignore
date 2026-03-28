@@ -37,7 +37,9 @@ data/student-pack/*
 data/binance-hist/*
 !data/binance-hist/.gitkeep
 
-# Generated submission (regenerate with run_p3.py; may reflect competitive output)
+# Generated outputs
+p1_alerts.csv
+p2_signals.csv
 submission.csv
 submission_offline.csv
 submission_live.csv
