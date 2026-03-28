@@ -213,6 +213,11 @@ def render_submission_panel(
         ok_t = [t for t in st.session_state[vt_key] if t in type_opts]
         st.session_state[vt_key] = ok_t if ok_t else list(type_opts)
 
+    if sym_key in st.session_state and not st.session_state[sym_key] and symbols:
+        st.session_state[sym_key] = list(symbols)
+    if vt_key in st.session_state and not st.session_state[vt_key] and type_opts:
+        st.session_state[vt_key] = list(type_opts)
+
     fc1, fc2, fc3 = st.columns(3)
     sel_sym = fc1.multiselect("Symbol", symbols, key=sym_key)
     sel_type = fc2.multiselect("Violation type", type_opts, key=vt_key)
@@ -238,28 +243,45 @@ def render_submission_panel(
 
     st.markdown(f"**Filtered rows:** {len(view)}")
 
+    # Charts need non-empty frames; empty filters should not blank the whole dashboard.
+    chart_df = view if len(view) > 0 else df
+    if len(view) == 0 and len(df) > 0:
+        st.info(
+            "No rows match **Symbol** / **Violation type** / **Search**. "
+            "Widen sidebar filters — charts below show the **full** dataset until then."
+        )
+
     ch1, ch2 = st.columns(2)
     with ch1:
         st.markdown("**By symbol**")
-        sym_counts = view.groupby("symbol", observed=True).size().sort_values(ascending=False)
-        st.bar_chart(sym_counts)
+        sym_counts = chart_df.groupby("symbol", observed=True).size().sort_values(ascending=False)
+        if len(sym_counts) > 0:
+            st.bar_chart(sym_counts)
+        else:
+            st.caption("No data for this chart.")
     with ch2:
         st.markdown("**By violation_type**")
-        vt = view["violation_type"].replace("", "(empty)")
-        st.bar_chart(vt.value_counts())
+        vt = chart_df["violation_type"].replace("", "(empty)")
+        vc = vt.value_counts()
+        if len(vc) > 0:
+            st.bar_chart(vc)
+        else:
+            st.caption("No data for this chart.")
 
-    ml = view["ml_rank_p"].dropna()
+    ml = chart_df["ml_rank_p"].dropna()
     if len(ml) > 1:
         st.markdown("**ML re-rank score (`ml_rank_p`) — bin counts**")
         hist, edges = np.histogram(ml.to_numpy(dtype=float), bins=16)
         mids = (edges[:-1] + edges[1:]) / 2.0
         st.bar_chart(pd.Series(hist, index=mids))
 
-    if view["date"].notna().any():
+    if chart_df["date"].notna().any():
         st.markdown("**Flags per day**")
-        daily = view.dropna(subset=["date"]).copy()
+        daily = chart_df.dropna(subset=["date"]).copy()
         daily["_d"] = daily["date"].dt.date
-        st.line_chart(daily.groupby("_d").size())
+        lc = daily.groupby("_d").size()
+        if len(lc) > 0:
+            st.line_chart(lc)
 
     st.divider()
     st.markdown("**Table**")
@@ -332,7 +354,7 @@ def main() -> None:
                 help="Smaller = faster (default 400).",
             )
             st.caption(
-                "First live run is often **30–90s** (8 symbols + ML). Enable cache + set **Refresh every** ≥ **45s** to avoid overlap."
+                "First live run is often **30–90s**. Keep **Auto-refresh off** until you see charts, or set **Refresh every ≥ 120s**."
             )
         else:
             st.markdown(
@@ -371,19 +393,20 @@ def main() -> None:
             help="Local path when not using second upload or SECOND_SUBMISSION_URL.",
         )
         st.divider()
+        _is_live = primary_mode == "Live (OKX)"
         live = st.toggle(
             "Auto-refresh (no manual browser refresh)",
-            value=True,
-            help="Reloads this page on an interval so charts pick up updated CSVs. Turn off for a static file.",
+            value=not _is_live,
+            help="**Live:** default **off** so the browser does not reload while the 30–90s pipeline runs (reloads cancel the run → no charts). Turn on after the first load or set Refresh ≥ 120s. **Static:** on by default.",
         )
         interval_s = st.slider(
             "Refresh every (seconds)",
-            min_value=10,
+            min_value=30,
             max_value=300,
-            value=45,
-            step=5,
+            value=120,
+            step=15,
             disabled=not live,
-            help="Live pipeline is heavy; 45s+ avoids overlapping runs. Use **Cache live pipeline** for snappy refreshes.",
+            help="Must be **longer** than one live pipeline run (~30–90s) or refreshes interrupt loading and graphs never appear.",
         )
         st.caption(f"Last run: **{datetime.now().strftime('%H:%M:%S')}**")
         st.divider()
@@ -409,6 +432,10 @@ def main() -> None:
     df_a = pd.DataFrame()
     primary_src = ""
     if primary_mode == "Live (OKX)":
+        st.info(
+            "**Live** loads in **~30–90s** the first time. **Metrics and charts show below** when the run finishes. "
+            "If the main area stays empty, turn **Auto-refresh** **off** in the sidebar — short refresh intervals reload the page and **cancel** the run before charts render."
+        )
         if use_live_cache:
             df_a, live_err = run_live_binance_submission_cached(
                 int(live_klines),
