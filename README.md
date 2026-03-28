@@ -92,7 +92,7 @@ export STUDENT_PACK=/path/to/student-pack
 python3 run_p3.py --data-root /path/to/student-pack -o submission.csv
 ```
 
-### Live (Binance public REST, near–real-time)
+### Live (OKX public REST by default, near–real-time)
 
 Pulls **1m klines** + **aggregate trades** for all **`SYMBOLS`**, runs the same detectors, and rewrites **`submission.csv`** on a timer (pair with the Streamlit dashboard **Live reload**).
 
@@ -107,9 +107,14 @@ python3 run_p3.py --live --live-once -o submission.csv
 python3 run_p3.py --live --live-interval 15 --live-klines 600 --live-trades 1000 -o submission.csv
 ```
 
-**Endpoints:** without **`BINANCE_SPOT_API`**, the client tries several **Binance** hosts (US → GCP mirrors → `.com`). If Binance still returns **403/451** (common from **cloud/datacenter** IPs), **`run_p3.py --live`** and the dashboard try **MEXC** then **OKX** (both public Spot REST, no key). Pin **`BINANCE_SPOT_API`** to force a Binance host; set **`LIVE_SPOT_VENUE=okx`** or **`mexc`** to use only that venue:
+**Live venue (one API, no fallback):** default is **OKX** public v5 REST (`LIVE_SPOT_VENUE` unset or `okx`). Set **`LIVE_SPOT_VENUE=binance`** to use **one** Binance Spot base only — **`BINANCE_SPOT_API`** if set, otherwise **`https://api.binance.us/api/v3`** (fails fast on 451; no mirror hopping).
 
 ```bash
+# Default: OKX (good from most networks including cloud hosts)
+python3 run_p3.py --live --live-once -o submission.csv
+
+# Binance US only (single host)
+export LIVE_SPOT_VENUE=binance
 export BINANCE_SPOT_API=https://api.binance.us/api/v3
 python3 run_p3.py --live --live-once -o submission.csv
 ```
@@ -180,18 +185,18 @@ python3 -m streamlit run dashboard/app.py
 # or: make dashboard
 ```
 
-**Default primary source** is **Live** (public REST + in-app pipeline — same stack as **`run_p3.py --live`**); no CSV upload required. On **`*.streamlit.app`**, the app defaults to **OKX** and **caches** the live result **90s** so pages are much faster after the first run; lower default kline/trade counts and **45s** auto-refresh reduce overlap. Switch the sidebar to **Static CSV** for a local path, secret URL, optional upload (under **Advanced**), or bundled **`dashboard/sample_submission.csv`**. Charts: **symbol**, **violation_type**, optional **`ml_rank_p`**, flags per **day**, filterable table.
+**Default primary source** is **Live** (**OKX** only — same in-app pipeline as **`run_p3.py --live`**); no CSV upload required. The app **caches** the live result **90s** (toggle in sidebar) and uses smaller default windows + **45s** auto-refresh. Secret **`LIVE_SPOT_VENUE=binance`** switches to a **single** Binance host. Switch to **Static CSV** for a local path, secret URL, optional upload, or bundled **`dashboard/sample_submission.csv`**. Charts: **symbol**, **violation_type**, optional **`ml_rank_p`**, flags per **day**, filterable table.
 
 ### Streamlit Community Cloud (hosted)
 
 `submission.csv` at repo root is **gitignored**, so that path is often missing on the server. The dashboard supports:
 
-1. **Live** (default) — public market data + pipeline (no upload). Venue order **Binance → MEXC → OKX** unless **`LIVE_SPOT_VENUE`** is set; hosted apps auto-prefer **OKX** for speed. Toggle **Cache live pipeline (~90s)** and **Clear live cache** in the sidebar. Secrets: **`LIVE_SPOT_VENUE`**, **`BINANCE_SPOT_API`**.  
+1. **Live** (default) — **OKX** public REST + pipeline (no upload, **no** backup exchanges). **`LIVE_SPOT_VENUE=binance`** for Binance-only. Toggle **Cache live pipeline (~90s)** / **Clear live cache**. Secrets: **`LIVE_SPOT_VENUE`**, **`BINANCE_SPOT_API`**.  
 2. **Static CSV** — path field, **`PRIMARY_SUBMISSION_URL`** / **`SECOND_SUBMISSION_URL`** in Secrets (see **`.streamlit/secrets.toml.example`**), optional **Advanced → upload**, or committed **`dashboard/sample_submission.csv`** (written by `run_p3.py` unless **`--no-dashboard-sample`**).
 
 **Cloud settings:** set **Main file path** to **`dashboard/app.py`**. **Python dependencies** come from repo-root **`requirements.txt`**.
 
-Example deployment: `https://yashassuresh775-bits-dashboardapp-49yjj9.streamlit.app/` — Live Binance works without shipping a CSV; use static options if the API is unreachable from the host.
+Example deployment: `https://yashassuresh775-bits-dashboardapp-49yjj9.streamlit.app/` — Live **OKX** works without shipping a CSV; use static options if the venue is unreachable from the host.
 
 ## Tuning before submit
 
@@ -213,6 +218,8 @@ Example deployment: `https://yashassuresh775-bits-dashboardapp-49yjj9.streamlit.
 | `p3/ml/ensemble_od.py` | IF + LOF rank fusion |
 | `p3/ml/ranker.py` | HistGradientBoosting pseudo-label re-rank |
 | `p3/pipeline.py` | Orchestration + corroboration + ML re-rank |
+| `p3/live/okx.py` | Public OKX v5 REST → same bar/trade shape as live pipeline |
+| `p3/live/binance.py` | Live fetch (OKX or single-host Binance); historical multi-host GET for backfill |
 | `run_p3.py` | CLI |
 | `Makefile` | `make run` / `make dual` / `make dashboard` / `make fetch-hist` (uses `.venv/bin/python` if present) |
 | `scripts/fetch_binance_history.py` | Paginated historical klines + agg trades → `data/binance-hist/` |

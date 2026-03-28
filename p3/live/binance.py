@@ -23,7 +23,7 @@ import pandas as pd
 
 from p3.io import normalize_market_dataframe, normalize_trades_dataframe
 
-# Shown for docs / legacy imports; live requests use ``binance_spot_get`` (451-aware fallback).
+# Shown for docs / legacy imports. **Historical** backfill uses ``binance_spot_get`` (multi-host).
 BINANCE_SPOT = os.environ.get(
     "BINANCE_SPOT_API",
     "https://api.binance.com/api/v3",
@@ -31,11 +31,15 @@ BINANCE_SPOT = os.environ.get(
 DEFAULT_UA = "BITS-p3-live/1.0"
 
 _resolved_spot_base: str | None = None
-# After a fallback venue succeeds, reuse it for this process (Streamlit autorefresh).
-_live_venue: str = "binance"  # "binance" | "mexc" | "okx"
 
 _BINANCE_US = "https://api.binance.us/api/v3"
 _BINANCE_COM = "https://api.binance.com/api/v3"
+
+
+def live_spot_venue() -> str:
+    """Live ``run_p3 --live`` / dashboard: **one** venue only — ``okx`` (default) or ``binance``."""
+    v = os.environ.get("LIVE_SPOT_VENUE", "okx").strip().lower()
+    return v if v == "binance" else "okx"
 
 
 def _spot_bases() -> list[str]:
@@ -127,80 +131,49 @@ def _http_get_json(url: str, *, timeout: float = 45.0) -> object:
         return json.loads(resp.read().decode())
 
 
+def _binance_live_base() -> str:
+    """Single Binance Spot REST base for **live** fetches (no host fallback)."""
+    b = os.environ.get("BINANCE_SPOT_API", "").strip().rstrip("/")
+    return b if b else _BINANCE_US
+
+
+def binance_live_get_json(path_with_query: str, *, timeout: float = 45.0) -> object:
+    """One GET to ``BINANCE_SPOT_API`` or default **api.binance.us** — fails fast on 451."""
+    rel = path_with_query.lstrip("/")
+    url = f"{_binance_live_base()}/{rel}"
+    return _http_get_json(url, timeout=timeout)
+
+
 def _volume_base_column(symbol: str) -> str:
     base = symbol.removesuffix("USDT")
     return f"Volume {base}"
 
 
 def fetch_klines_raw(symbol: str, *, limit: int = 500) -> list[list]:
-    global _live_venue
     if limit > 1000:
         limit = 1000
     q = f"symbol={symbol}&interval=1m&limit={limit}"
-    if _live_venue == "mexc":
-        from p3.live import mexc
-
-        raw = mexc.fetch_klines_normalized(symbol, limit=limit)
-    elif _live_venue == "okx":
+    if live_spot_venue() == "okx":
         from p3.live import okx
 
         raw = okx.fetch_klines_normalized(symbol, limit=limit)
     else:
-        try:
-            raw = binance_spot_get(f"klines?{q}")
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
-            from p3.live import mexc
-            from p3.live import okx
-
-            try:
-                raw = mexc.fetch_klines_normalized(symbol, limit=limit)
-                _live_venue = "mexc"
-            except Exception as mexc_e:  # noqa: BLE001
-                try:
-                    raw = okx.fetch_klines_normalized(symbol, limit=limit)
-                    _live_venue = "okx"
-                except Exception as okx_e:  # noqa: BLE001
-                    raise RuntimeError(
-                        f"Klines failed for {symbol} (tried Binance, MEXC, OKX): "
-                        f"binance={e!r}; mexc={mexc_e!r}; okx={okx_e!r}"
-                    ) from okx_e
+        raw = binance_live_get_json(f"klines?{q}")
     if not isinstance(raw, list):
         raise ValueError(f"Unexpected klines response for {symbol}")
     return raw
 
 
 def fetch_agg_trades_raw(symbol: str, *, limit: int = 1000) -> list[dict]:
-    global _live_venue
     if limit > 1000:
         limit = 1000
     q = f"symbol={symbol}&limit={limit}"
-    if _live_venue == "mexc":
-        from p3.live import mexc
-
-        raw = mexc.fetch_agg_trades_normalized(symbol, limit=limit)
-    elif _live_venue == "okx":
+    if live_spot_venue() == "okx":
         from p3.live import okx
 
         raw = okx.fetch_trades_normalized(symbol, limit=limit)
     else:
-        try:
-            raw = binance_spot_get(f"aggTrades?{q}")
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
-            from p3.live import mexc
-            from p3.live import okx
-
-            try:
-                raw = mexc.fetch_agg_trades_normalized(symbol, limit=limit)
-                _live_venue = "mexc"
-            except Exception as mexc_e:  # noqa: BLE001
-                try:
-                    raw = okx.fetch_trades_normalized(symbol, limit=limit)
-                    _live_venue = "okx"
-                except Exception as okx_e:  # noqa: BLE001
-                    raise RuntimeError(
-                        f"Agg trades failed for {symbol} (tried Binance, MEXC, OKX): "
-                        f"binance={e!r}; mexc={mexc_e!r}; okx={okx_e!r}"
-                    ) from okx_e
+        raw = binance_live_get_json(f"aggTrades?{q}")
     if not isinstance(raw, list):
         raise ValueError(f"Unexpected aggTrades response for {symbol}")
     return raw
@@ -271,13 +244,9 @@ def fetch_live_frames(
     pause_sec: float = 0.12,
 ) -> dict[str, tuple[pd.DataFrame, pd.DataFrame]]:
     """
-    Pull spot OHLCV + recent trades per symbol. Tries **Binance** (multi-host), then **MEXC**, then **OKX**
-    unless ``LIVE_SPOT_VENUE`` is set to ``binance``, ``mexc``, or ``okx`` to pin one venue.
+    Pull spot OHLCV + recent trades per symbol from **one** venue: **OKX** (default) or **Binance**
+    (``LIVE_SPOT_VENUE=binance``, optional ``BINANCE_SPOT_API``). No cross-exchange fallback.
     """
-    global _live_venue
-    forced = os.environ.get("LIVE_SPOT_VENUE", "").strip().lower()
-    if forced in ("binance", "mexc", "okx"):
-        _live_venue = forced
     out: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
     sym_list = list(symbols)
     for i, sym in enumerate(sym_list):

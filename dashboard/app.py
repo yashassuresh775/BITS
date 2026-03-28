@@ -3,7 +3,7 @@ Problem 3 submission explorer — run from repo root:
 
   streamlit run dashboard/app.py
 
-**Default:** primary data is **live Binance** (public REST + same pipeline as ``run_p3.py --live``) — no CSV upload.
+**Default:** primary data is **live OKX** (public REST + same pipeline as ``run_p3.py --live``); optional **Binance** via secrets.
 For offline snapshots use **Static CSV** (path, optional Secrets URL, or bundled ``dashboard/sample_submission.csv``).
 Optional CSV upload lives under **Advanced** in the sidebar.
 """
@@ -31,6 +31,9 @@ except ImportError:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from p3.live.binance import live_spot_venue
+
 DEFAULT_CSV = REPO_ROOT / "submission.csv"
 BUNDLED_SAMPLE_CSV = REPO_ROOT / "dashboard" / "sample_submission.csv"
 ML_P_RE = re.compile(r"ml_rank_p=([\d.]+)")
@@ -114,25 +117,6 @@ def _apply_binance_env_from_secrets() -> None:
                 os.environ[key] = s
         except (KeyError, FileNotFoundError, TypeError, RuntimeError):
             pass
-
-
-def _prefer_okx_on_streamlit_cloud() -> None:
-    """Skip slow Binance 451 retries on Community Cloud (``*.streamlit.app``) unless user set ``LIVE_SPOT_VENUE``."""
-    _apply_binance_env_from_secrets()
-    if os.environ.get("LIVE_SPOT_VENUE", "").strip():
-        return
-    try:
-        ctx = getattr(st, "context", None)
-        if ctx is None:
-            return
-        h = getattr(ctx, "headers", None)
-        if h is None:
-            return
-        host = (h.get("Host") or h.get("host") or "").lower()
-        if "streamlit.app" in host:
-            os.environ["LIVE_SPOT_VENUE"] = "okx"
-    except (AttributeError, TypeError, RuntimeError):
-        pass
 
 
 def _live_env_fingerprint() -> str:
@@ -296,11 +280,11 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    _prefer_okx_on_streamlit_cloud()
+    _apply_binance_env_from_secrets()
     st.title("BITS — Problem 3 submission explorer")
     st.caption(
-        "Default **Live**: tries **Binance**, then **MEXC**, then **OKX** so hosted apps still get market data when one venue blocks. "
-        "Switch to **Static CSV** for local files, bundled sample, or a secret URL."
+        "Default **Live** uses **OKX** public REST only (fast, one hop). Set secret **`LIVE_SPOT_VENUE=binance`** for Binance only "
+        "(optional **`BINANCE_SPOT_API`**). **Static CSV** = local path, URL, or bundled sample."
     )
 
     secret_primary = _secret_str("PRIMARY_SUBMISSION_URL")
@@ -310,18 +294,18 @@ def main() -> None:
         st.header("Data")
         primary_mode = st.radio(
             "Primary source",
-            ["Live Binance", "Static CSV"],
+            ["Live (OKX)", "Static CSV"],
             horizontal=True,
-            help="Live = real-time REST + pipeline each refresh. Static = file path, URL secret, or optional upload.",
+            key="primary_source_v2",
+            help="Live = OKX (default) or Binance via secrets + pipeline. Static = file path, URL, or upload.",
         )
         live_klines = 400
         live_trades = 400
         use_live_cache = True
-        if primary_mode == "Live Binance":
+        if primary_mode == "Live (OKX)":
             st.markdown(
-                "Same detectors as `run_p3.py --live`. Live data: **Binance** (several hosts) → **MEXC** → **OKX** "
-                "(public REST, no key). On **streamlit.app**, **OKX** is chosen by default (faster than Binance 451 retries). "
-                "Secrets: `LIVE_SPOT_VENUE`, `BINANCE_SPOT_API`."
+                "Same detectors as `run_p3.py --live`. **One venue only:** **OKX** by default (no backup exchanges). "
+                "Secret **`LIVE_SPOT_VENUE=binance`** + optional **`BINANCE_SPOT_API`** for Binance-only."
             )
             use_live_cache = st.toggle(
                 "Cache live pipeline (~90s)",
@@ -358,7 +342,7 @@ def main() -> None:
         upload_primary = None
         upload_second = None
         with st.expander("Advanced: CSV upload (optional)", expanded=False):
-            st.caption("Overrides static path/URL when a file is selected. Ignored when primary is **Live Binance**.")
+            st.caption("Overrides static path/URL when a file is selected. Ignored when primary is **Live**.")
             upload_primary = st.file_uploader(
                 "Upload primary CSV",
                 type=["csv"],
@@ -377,8 +361,8 @@ def main() -> None:
         csv_path = st.text_input(
             "Primary CSV path (Static mode)",
             value=str(DEFAULT_CSV),
-            disabled=(primary_mode == "Live Binance"),
-            help="Ignored when primary is Live Binance.",
+            disabled=(primary_mode == "Live (OKX)"),
+            help="Ignored when primary is Live.",
         )
         csv_path_b = st.text_input(
             "Second CSV path (optional — compare tab)",
@@ -421,10 +405,10 @@ def main() -> None:
         else:
             st.sidebar.warning("Install `streamlit-autorefresh` for live mode (`pip install -r requirements.txt`).")
 
-    # Primary: Live Binance | upload > secret URL > local path > bundled sample
+    # Primary: Live (OKX/Binance) | upload > secret URL > local path > bundled sample
     df_a = pd.DataFrame()
     primary_src = ""
-    if primary_mode == "Live Binance":
+    if primary_mode == "Live (OKX)":
         if use_live_cache:
             df_a, live_err = run_live_binance_submission_cached(
                 int(live_klines),
@@ -445,8 +429,7 @@ def main() -> None:
                 primary_src = f"bundled_snapshot:{BUNDLED_SAMPLE_CSV.resolve()}|{mtime_fb}"
                 st.warning(
                     "Showing **bundled** `dashboard/sample_submission.csv` from the repo (offline snapshot, not live). "
-                    "Latest code tries **MEXC** and **OKX** when Binance is blocked — on Streamlit Cloud use **Manage app → Reboot** "
-                    "after deploy so this build runs."
+                    "Live uses **OKX** by default (see secrets **`LIVE_SPOT_VENUE`**). Reboot the app after deploy if you still see old behavior."
                 )
     elif upload_primary is not None:
         raw_p = upload_primary.getvalue()
@@ -483,7 +466,7 @@ def main() -> None:
         second_src = f"path:{Path(path_b).expanduser().resolve()}|{mtime_b}"
 
     if df_a.empty:
-        if primary_mode == "Live Binance":
+        if primary_mode == "Live (OKX)":
             st.warning(
                 "No rows from live run (pipeline returned empty or fetch failed). "
                 "Check network / symbols on your venue, set `BINANCE_SPOT_API` if needed, or switch **Primary source** to **Static CSV**."
@@ -496,7 +479,7 @@ def main() -> None:
             )
         return
 
-    if primary_mode == "Live Binance":
+    if primary_mode == "Live (OKX)":
         if str(primary_src).startswith("bundled_snapshot"):
             st.info(
                 f"**Bundled snapshot** — {len(df_a)} rows (saved CSV from the repo; switch to **Static CSV** or fix live fetch)."
@@ -504,7 +487,7 @@ def main() -> None:
         else:
             cache_note = " (90s cache on)" if use_live_cache else " (cache off — every refresh reruns ML)"
             st.success(
-                f"**Live pipeline** — {len(df_a)} rows · refresh **{interval_s}s**{cache_note} · Binance / MEXC / OKX."
+                f"**Live pipeline** — {len(df_a)} rows · refresh **{interval_s}s**{cache_note} · venue **{live_spot_venue()}**."
             )
     elif live and st_autorefresh is not None:
         st.success(
