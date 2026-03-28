@@ -107,15 +107,23 @@ python3 run_p3.py --live --live-once -o submission.csv
 python3 run_p3.py --live --live-interval 15 --live-klines 600 --live-trades 1000 -o submission.csv
 ```
 
-**Live venue (one API, no fallback):** default is **OKX** public v5 REST (`LIVE_SPOT_VENUE` unset or `okx`). Set **`LIVE_SPOT_VENUE=binance`** to use **one** Binance Spot base only — **`BINANCE_SPOT_API`** if set, otherwise **`https://api.binance.us/api/v3`** (fails fast on 451; no mirror hopping).
+**Live venue (`LIVE_SPOT_VENUE`):**
+
+- **`okx`** (default) — OKX public v5 REST only.
+- **`binance`** — one Binance Spot base: **`BINANCE_SPOT_API`** if set, else **`https://api.binance.us/api/v3`** (fails fast on 451; live path does not mirror-hop).
+- **`both`** (aliases `okx+binance`, `binance+okx`) — **OKX and Binance in parallel** per symbol: 1m bars are **merged** (wider high/low, summed volumes); trades are **concatenated** with **`okx:`** / **`bn:`** id prefixes. Slower than one venue but richer tape. If one exchange errors, the other is still used when it returned data.
 
 ```bash
-# Default: OKX (good from most networks including cloud hosts)
+# Default: OKX
 python3 run_p3.py --live --live-once -o submission.csv
 
-# Binance US only (single host)
+# Binance only (single host)
 export LIVE_SPOT_VENUE=binance
 export BINANCE_SPOT_API=https://api.binance.us/api/v3
+python3 run_p3.py --live --live-once -o submission.csv
+
+# OKX + Binance merged (set BINANCE_SPOT_API if .us is wrong for your network)
+export LIVE_SPOT_VENUE=both
 python3 run_p3.py --live --live-once -o submission.csv
 ```
 
@@ -192,13 +200,13 @@ python3 run_p3.py -o submission.csv
 # optional: python3 run_p3.py --live --live-once -o submission_live.csv
 ```
 
-**Default primary source** is **Static CSV** → **`submission.csv`**; if that file is missing, the app falls back to committed **`dashboard/sample_submission.csv`**. Use sidebar **Live (OKX)** for the same pipeline as **`run_p3.py --live`** (**OKX** only unless you set **`LIVE_SPOT_VENUE=binance`** / **`BINANCE_SPOT_API`** in the environment or **Secrets**). Live mode can **cache** results **~90s** (sidebar toggle). **Auto-refresh** defaults **on** for static files and **off** for live (so long runs are not interrupted); interval default **120s** when enabled.
+**Default primary source** is **Static CSV** → **`submission.csv`**; if that file is missing, the app falls back to committed **`dashboard/sample_submission.csv`**. Sidebar **Live (API)** runs the same pipeline as **`run_p3.py --live`**; venue is **`LIVE_SPOT_VENUE`**: **`okx`**, **`binance`**, or **`both`** (plus optional **`BINANCE_SPOT_API`** in env or **Secrets**). Live mode can **cache** results **~90s** (sidebar toggle). **Auto-refresh** defaults **on** for static files and **off** for live; interval default **120s** when enabled.
 
 Charts: **symbol**, **violation_type**, optional **`ml_rank_p`**, flags per **day**, filterable table.
 
 ### Streamlit Community Cloud (optional)
 
-Same app; set **Main file path** to **`dashboard/app.py`**. **`submission.csv`** is usually absent on the server — **Static** mode then uses **`dashboard/sample_submission.csv`** or **`PRIMARY_SUBMISSION_URL`** / upload (see **`.streamlit/secrets.toml.example`**). Choose **Live (OKX)** in the sidebar for API-backed data without committing a CSV.
+Same app; set **Main file path** to **`dashboard/app.py`**. **`submission.csv`** is usually absent on the server — **Static** mode then uses **`dashboard/sample_submission.csv`** or **`PRIMARY_SUBMISSION_URL`** / upload (see **`.streamlit/secrets.toml.example`**). Choose **Live (API)** in the sidebar for API-backed data; set **`LIVE_SPOT_VENUE`** in Secrets as needed (`okx`, `binance`, or `both`).
 
 ## Tuning before submit
 

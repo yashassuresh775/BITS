@@ -4,7 +4,7 @@ Problem 3 submission explorer — run from repo root:
   streamlit run dashboard/app.py
 
 **Local default:** primary is **Static CSV** (``submission.csv`` or bundled ``dashboard/sample_submission.csv``).
-Switch to **Live (OKX)** for the same pipeline as ``run_p3.py --live`` (optional **Binance** via secrets / env).
+Switch to **Live (API)** for the same pipeline as ``run_p3.py --live`` (OKX / Binance / both via ``LIVE_SPOT_VENUE``).
 Optional CSV upload lives under **Advanced** in the sidebar.
 """
 
@@ -305,7 +305,8 @@ def main() -> None:
     _apply_binance_env_from_secrets()
     st.title("BITS — Problem 3 submission explorer")
     st.caption(
-        "Default **Static CSV** = `submission.csv` or bundled sample. **Live (OKX)** = public REST + pipeline (secret **`LIVE_SPOT_VENUE=binance`** for Binance only, optional **`BINANCE_SPOT_API`**)."
+        "Default **Static CSV** = `submission.csv` or bundled sample. **Live (API)** = public REST + pipeline. "
+        "Venue: **`LIVE_SPOT_VENUE`** = `okx` (default), `binance`, or `both` (OKX+Binance merged; optional **`BINANCE_SPOT_API`**)."
     )
 
     secret_primary = _secret_str("PRIMARY_SUBMISSION_URL")
@@ -315,18 +316,19 @@ def main() -> None:
         st.header("Data")
         primary_mode = st.radio(
             "Primary source",
-            ["Static CSV", "Live (OKX)"],
+            ["Static CSV", "Live (API)"],
             horizontal=True,
-            key="primary_source_v3",
-            help="Static = local path, URL, upload, or bundled sample (default for local hosting). Live = OKX or Binance via secrets + pipeline.",
+            key="primary_source_v4",
+            help="Static = local path, URL, upload, or bundled sample. Live = `run_p3.py --live` pipeline; venue from `LIVE_SPOT_VENUE` (okx / binance / both).",
         )
         live_klines = 400
         live_trades = 400
         use_live_cache = True
-        if primary_mode == "Live (OKX)":
+        if primary_mode == "Live (API)":
             st.markdown(
-                "Same detectors as `run_p3.py --live`. **One venue only:** **OKX** by default (no backup exchanges). "
-                "Secret **`LIVE_SPOT_VENUE=binance`** + optional **`BINANCE_SPOT_API`** for Binance-only."
+                "Same detectors as `run_p3.py --live`. **Venue** via env / Secrets **`LIVE_SPOT_VENUE`**: "
+                "**`okx`** (default), **`binance`** (single host; optional **`BINANCE_SPOT_API`**), or **`both`** "
+                "(OKX + Binance in parallel, merged bars + combined trades)."
             )
             use_live_cache = st.toggle(
                 "Cache live pipeline (~90s)",
@@ -382,7 +384,7 @@ def main() -> None:
         csv_path = st.text_input(
             "Primary CSV path (Static mode)",
             value=str(DEFAULT_CSV),
-            disabled=(primary_mode == "Live (OKX)"),
+            disabled=(primary_mode == "Live (API)"),
             help="Ignored when primary is Live.",
         )
         csv_path_b = st.text_input(
@@ -392,7 +394,7 @@ def main() -> None:
             help="Local path when not using second upload or SECOND_SUBMISSION_URL.",
         )
         st.divider()
-        _is_live = primary_mode == "Live (OKX)"
+        _is_live = primary_mode == "Live (API)"
         live = st.toggle(
             "Auto-refresh (no manual browser refresh)",
             value=not _is_live,
@@ -427,10 +429,10 @@ def main() -> None:
         else:
             st.sidebar.warning("Install `streamlit-autorefresh` for live mode (`pip install -r requirements.txt`).")
 
-    # Primary: Live (OKX/Binance) | upload > secret URL > local path > bundled sample
+    # Primary: Live (API) | upload > secret URL > local path > bundled sample
     df_a = pd.DataFrame()
     primary_src = ""
-    if primary_mode == "Live (OKX)":
+    if primary_mode == "Live (API)":
         st.info(
             "**Live** loads in **~30–90s** the first time. **Metrics and charts show below** when the run finishes. "
             "If the main area stays empty, turn **Auto-refresh** **off** in the sidebar — short refresh intervals reload the page and **cancel** the run before charts render."
@@ -455,7 +457,7 @@ def main() -> None:
                 primary_src = f"bundled_snapshot:{BUNDLED_SAMPLE_CSV.resolve()}|{mtime_fb}"
                 st.warning(
                     "Showing **bundled** `dashboard/sample_submission.csv` from the repo (offline snapshot, not live). "
-                    "Live uses **OKX** by default (see secrets **`LIVE_SPOT_VENUE`**). Reboot the app after deploy if you still see old behavior."
+                    "Set **`LIVE_SPOT_VENUE`** (`okx`, `binance`, or `both`) if live fetch fails. Reboot the app after deploy if you still see old behavior."
                 )
     elif upload_primary is not None:
         raw_p = upload_primary.getvalue()
@@ -492,7 +494,7 @@ def main() -> None:
         second_src = f"path:{Path(path_b).expanduser().resolve()}|{mtime_b}"
 
     if df_a.empty:
-        if primary_mode == "Live (OKX)":
+        if primary_mode == "Live (API)":
             st.warning(
                 "No rows from live run (pipeline returned empty or fetch failed). "
                 "Check network / symbols on your venue, set `BINANCE_SPOT_API` if needed, or switch **Primary source** to **Static CSV**."
@@ -505,7 +507,7 @@ def main() -> None:
             )
         return
 
-    if primary_mode == "Live (OKX)":
+    if primary_mode == "Live (API)":
         if str(primary_src).startswith("bundled_snapshot"):
             st.info(
                 f"**Bundled snapshot** — {len(df_a)} rows (saved CSV from the repo; switch to **Static CSV** or fix live fetch)."

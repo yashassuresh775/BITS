@@ -16,6 +16,7 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable
 
@@ -37,9 +38,20 @@ _BINANCE_COM = "https://api.binance.com/api/v3"
 
 
 def live_spot_venue() -> str:
-    """Live ``run_p3 --live`` / dashboard: **one** venue only — ``okx`` (default) or ``binance``."""
+    """
+    Live ``run_p3 --live`` / dashboard:
+
+    - ``okx`` (default) — OKX public v5 only.
+    - ``binance`` — one Binance Spot base only (``BINANCE_SPOT_API`` or default .us).
+    - ``both`` (aliases: ``okx+binance``, ``binance+okx``) — fetch **both** in parallel per symbol,
+      merge 1m bars and concatenate trades (``okx:`` / ``bn:`` trade_id prefixes).
+    """
     v = os.environ.get("LIVE_SPOT_VENUE", "okx").strip().lower()
-    return v if v == "binance" else "okx"
+    if v in ("both", "okx+binance", "binance+okx", "okx_binance"):
+        return "both"
+    if v == "binance":
+        return "binance"
+    return "okx"
 
 
 def _spot_bases() -> list[str]:
@@ -150,6 +162,10 @@ def _volume_base_column(symbol: str) -> str:
 
 
 def fetch_klines_raw(symbol: str, *, limit: int = 500) -> list[list]:
+    if live_spot_venue() == "both":
+        raise ValueError(
+            "LIVE_SPOT_VENUE=both: use fetch_symbol_frames / fetch_live_frames (not fetch_klines_raw)."
+        )
     if limit > 1000:
         limit = 1000
     q = f"symbol={symbol}&interval=1m&limit={limit}"
@@ -165,6 +181,10 @@ def fetch_klines_raw(symbol: str, *, limit: int = 500) -> list[list]:
 
 
 def fetch_agg_trades_raw(symbol: str, *, limit: int = 1000) -> list[dict]:
+    if live_spot_venue() == "both":
+        raise ValueError(
+            "LIVE_SPOT_VENUE=both: use fetch_symbol_frames / fetch_live_frames (not fetch_agg_trades_raw)."
+        )
     if limit > 1000:
         limit = 1000
     q = f"symbol={symbol}&limit={limit}"
@@ -221,19 +241,168 @@ def agg_trades_to_trades_dataframe(symbol: str, raw: list[dict]) -> pd.DataFrame
     return df.sort_values("timestamp").reset_index(drop=True)
 
 
+def _fetch_okx_symbol_frames(
+    symbol: str, *, kline_limit: int, trades_limit: int
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    from p3.live import okx
+
+    kl = min(int(kline_limit), okx.MAX_KLINES)
+    tl = min(int(trades_limit), okx.MAX_TRADES)
+    k_raw = okx.fetch_klines_normalized(symbol, limit=kl)
+    t_raw = okx.fetch_trades_normalized(symbol, limit=tl)
+    m_raw = klines_to_market_dataframe(symbol, k_raw)
+    tr_raw = agg_trades_to_trades_dataframe(symbol, t_raw)
+    return (
+        normalize_market_dataframe(m_raw, symbol),
+        normalize_trades_dataframe(tr_raw, symbol),
+    )
+
+
+def _fetch_binance_symbol_frames(
+    symbol: str, *, kline_limit: int, trades_limit: int
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    klim = min(int(kline_limit), 1000)
+    tlim = min(int(trades_limit), 1000)
+    qk = f"symbol={symbol}&interval=1m&limit={klim}"
+    qt = f"symbol={symbol}&limit={tlim}"
+    k_raw = binance_live_get_json(f"klines?{qk}")
+    t_raw = binance_live_get_json(f"aggTrades?{qt}")
+    if not isinstance(k_raw, list):
+        raise ValueError(f"Unexpected klines response for {symbol}")
+    if not isinstance(t_raw, list):
+        raise ValueError(f"Unexpected aggTrades response for {symbol}")
+    m_raw = klines_to_market_dataframe(symbol, k_raw)
+    tr_raw = agg_trades_to_trades_dataframe(symbol, t_raw)
+    return (
+        normalize_market_dataframe(m_raw, symbol),
+        normalize_trades_dataframe(tr_raw, symbol),
+    )
+
+
+def _merge_market_bars(m_okx: pd.DataFrame, m_bn: pd.DataFrame) -> pd.DataFrame:
+    """One row per UTC minute: combine highs/lows/volumes from OKX + Binance."""
+    if m_okx.empty:
+        return m_bn.copy()
+    if m_bn.empty:
+        return m_okx.copy()
+    sym = str(m_okx["symbol"].iloc[0])
+    a = m_okx.copy()
+    b = m_bn.copy()
+    a["Date"] = pd.to_datetime(a["Date"]).dt.floor("min")
+    b["Date"] = pd.to_datetime(b["Date"]).dt.floor("min")
+    combo = pd.concat([a.assign(_src=0), b.assign(_src=1)], ignore_index=True)
+    combo = combo.sort_values(["Date", "_src"])
+    rows: list[dict] = []
+    for d, g in combo.groupby("Date", sort=True):
+        g = g.sort_values("_src")
+        rows.append(
+            {
+                "Date": d,
+                "Open": float(g["Open"].iloc[0]),
+                "High": float(g["High"].max()),
+                "Low": float(g["Low"].min()),
+                "Close": float(g["Close"].iloc[-1]),
+                "vol_base": float(g["vol_base"].sum()),
+                "vol_usdt": float(g["vol_usdt"].sum()),
+                "tradecount": int(g["tradecount"].sum()),
+                "symbol": sym,
+            }
+        )
+    out = pd.DataFrame(rows)
+    out["mid"] = (out["High"] + out["Low"]) / 2.0
+    return out.sort_values("Date").reset_index(drop=True)
+
+
+def _merge_dual_trades(t_okx: pd.DataFrame, t_bn: pd.DataFrame) -> pd.DataFrame:
+    parts: list[pd.DataFrame] = []
+    if not t_okx.empty:
+        o = t_okx.copy()
+        o["trade_id"] = "okx:" + o["trade_id"].astype(str)
+        parts.append(o)
+    if not t_bn.empty:
+        b = t_bn.copy()
+        b["trade_id"] = "bn:" + b["trade_id"].astype(str)
+        parts.append(b)
+    if not parts:
+        return pd.DataFrame(
+            columns=[
+                "trade_id",
+                "timestamp",
+                "price",
+                "quantity",
+                "side",
+                "wallet_id",
+                "symbol",
+                "notional",
+                "date",
+                "minute",
+            ]
+        )
+    out = pd.concat(parts, ignore_index=True)
+    out = out.sort_values("timestamp").reset_index(drop=True)
+    out["notional"] = out["price"] * out["quantity"]
+    out["date"] = out["timestamp"].dt.normalize()
+    out["minute"] = out["timestamp"].dt.floor("min")
+    return out
+
+
+def _fetch_symbol_frames_dual(
+    symbol: str, *, kline_limit: int, trades_limit: int
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    err_okx: BaseException | None = None
+    err_bn: BaseException | None = None
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_okx = ex.submit(
+            _fetch_okx_symbol_frames,
+            symbol,
+            kline_limit=kline_limit,
+            trades_limit=trades_limit,
+        )
+        f_bn = ex.submit(
+            _fetch_binance_symbol_frames,
+            symbol,
+            kline_limit=kline_limit,
+            trades_limit=trades_limit,
+        )
+        try:
+            m_o, tr_o = f_okx.result()
+        except BaseException as e:
+            err_okx = e
+            m_o, tr_o = pd.DataFrame(), pd.DataFrame()
+        try:
+            m_b, tr_b = f_bn.result()
+        except BaseException as e:
+            err_bn = e
+            m_b, tr_b = pd.DataFrame(), pd.DataFrame()
+    if m_o.empty and m_b.empty:
+        msg = f"Live fetch failed for {symbol}"
+        if err_okx and err_bn:
+            raise RuntimeError(f"{msg}: OKX ({err_okx}); Binance ({err_bn})") from err_okx
+        raise RuntimeError(msg + ".") from (err_okx or err_bn)
+
+    m_out = _merge_market_bars(m_o, m_b)
+    tr_out = _merge_dual_trades(tr_o, tr_b)
+    return m_out, tr_out
+
+
 def fetch_symbol_frames(
     symbol: str,
     *,
     kline_limit: int = 1000,
     trades_limit: int = 1000,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    k_raw = fetch_klines_raw(symbol, limit=kline_limit)
-    t_raw = fetch_agg_trades_raw(symbol, limit=trades_limit)
-    m_raw = klines_to_market_dataframe(symbol, k_raw)
-    tr_raw = agg_trades_to_trades_dataframe(symbol, t_raw)
-    market = normalize_market_dataframe(m_raw, symbol)
-    trades = normalize_trades_dataframe(tr_raw, symbol)
-    return market, trades
+    v = live_spot_venue()
+    if v == "both":
+        return _fetch_symbol_frames_dual(
+            symbol, kline_limit=kline_limit, trades_limit=trades_limit
+        )
+    if v == "okx":
+        return _fetch_okx_symbol_frames(
+            symbol, kline_limit=kline_limit, trades_limit=trades_limit
+        )
+    return _fetch_binance_symbol_frames(
+        symbol, kline_limit=kline_limit, trades_limit=trades_limit
+    )
 
 
 def fetch_live_frames(
@@ -244,8 +413,12 @@ def fetch_live_frames(
     pause_sec: float = 0.12,
 ) -> dict[str, tuple[pd.DataFrame, pd.DataFrame]]:
     """
-    Pull spot OHLCV + recent trades per symbol from **one** venue: **OKX** (default) or **Binance**
-    (``LIVE_SPOT_VENUE=binance``, optional ``BINANCE_SPOT_API``). No cross-exchange fallback.
+    Pull spot OHLCV + recent trades per symbol.
+
+    - **OKX** (default): ``LIVE_SPOT_VENUE`` unset / ``okx``.
+    - **Binance** only: ``LIVE_SPOT_VENUE=binance`` (optional ``BINANCE_SPOT_API``).
+    - **Both** (parallel per symbol): ``LIVE_SPOT_VENUE=both`` — merged 1m bars, trades with
+      ``okx:`` / ``bn:`` id prefixes. If one venue fails, the other is still used when it returned data.
     """
     out: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
     sym_list = list(symbols)
