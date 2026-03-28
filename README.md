@@ -32,6 +32,7 @@ Python pipeline for the **crypto blind anomaly hunt** (Problem 3): load 8 pairs 
 
 7. **Pseudo-label re-ranker** — `p3/ml/ranker.py`  
    - **`HistGradientBoostingClassifier`** trained on **trusted** detectors (`TRUSTED_DETECTORS`: e.g. `peg_break`, `wash_volume_at_peg`) as positives and **sampled** normal trades as negatives.  
+   - If strict peg labels are **too few** (common on **live** spot), a **broad fallback** (`ML_BROAD_TRUSTED_FALLBACK`) adds positives from `ML_BROAD_TRUSTED_DETECTORS` (e.g. HOD spike, BAT hot hour, pump/dump bars, BTC divergence) so **`ml_rank_p`** still trains — disable for student-pack-only parity.  
    - Scores **deduped** candidates, sorts by **`predict_proba` (positive class)**, then **`score`**, then **`head(MAX_SUBMISSION_ROWS)`**.  
    - Appends **`| ml_rank_p=…`** to **`remarks`** (pseudo-labels ≠ organizer labels — tune with care).
 
@@ -210,7 +211,7 @@ Same app; set **Main file path** to **`dashboard/app.py`**. **`submission.csv`**
 
 ## Tuning before submit
 
-- Edit **`p3/config.py`**: `MAX_SUBMISSION_ROWS`, `PEG_BREAK_ABS`, **`BAT_HOUR_VOLUME_MULT`**, **`MAJOR_PAIR_HOD_MULT`**, **`MAJOR_PAIR_MIN_NOTIONAL_USDT`**, `ROUND_TRIP_*`, `STRUCT_*`, `IF_CONTAMINATION`, `IF_SYMBOLS`, **`USE_ENSEMBLE_ANOMALY`**, **`USE_ML_RERANKER`**, **`TRUSTED_DETECTORS`**, **`ML_*`**.  
+- Edit **`p3/config.py`**: `MAX_SUBMISSION_ROWS`, `PEG_BREAK_ABS`, **`BAT_HOUR_VOLUME_MULT`**, **`MAJOR_PAIR_HOD_MULT`**, **`MAJOR_PAIR_MIN_NOTIONAL_USDT`**, `ROUND_TRIP_*`, `STRUCT_*`, `IF_CONTAMINATION`, `IF_SYMBOLS`, **`USE_ENSEMBLE_ANOMALY`**, **`USE_ML_RERANKER`**, **`TRUSTED_DETECTORS`**, **`ML_BROAD_TRUSTED_*`**, **`ML_*`**.  
 - **BATUSDT hot-hour** and **BTC/ETH HOD spikes** are on by default; raise thresholds if they add too many rows before the ML cap.  
 - Add **`remarks`**; graders use them for partial credit when `violation_type` is off.
 

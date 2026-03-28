@@ -60,9 +60,21 @@ ENSEMBLE_SYMBOLS = frozenset(
 # Pseudo-label re-ranker (HistGradientBoostingClassifier).
 USE_ML_RERANKER = True
 TRUSTED_DETECTORS = frozenset({"peg_break", "wash_volume_at_peg"})
+# When strict labels are missing (typical on **live** spot — USDC stays on peg), widen positives once.
+ML_BROAD_TRUSTED_FALLBACK = True
+ML_BROAD_TRUSTED_DETECTORS = frozenset(
+    {
+        "major_pair_hod_spike",
+        "bat_hot_hour",
+        "pump_dump_bars",
+        "cross_btc_div",
+    }
+)
 ML_NEG_MULTIPLIER = 4
 ML_NEG_CAP_PER_SYMBOL = 500
 ML_MIN_POSITIVES = 3
+# Lower floor only for the broad set (still need ≥2 classes after sampling).
+ML_MIN_POSITIVES_BROAD = 2
 ML_RANDOM_STATE = 42
 ML_MAX_ITER = 120
 ML_MAX_DEPTH = 8

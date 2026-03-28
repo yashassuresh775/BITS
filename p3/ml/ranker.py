@@ -6,9 +6,12 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 
 from p3.config import (
     MAX_SUBMISSION_ROWS,
+    ML_BROAD_TRUSTED_DETECTORS,
+    ML_BROAD_TRUSTED_FALLBACK,
     ML_MAX_DEPTH,
     ML_MAX_ITER,
     ML_MIN_POSITIVES,
+    ML_MIN_POSITIVES_BROAD,
     ML_MIN_SAMPLES_LEAF,
     ML_NEG_CAP_PER_SYMBOL,
     ML_NEG_MULTIPLIER,
@@ -38,12 +41,15 @@ def _prepare_enriched(en: pd.DataFrame) -> pd.DataFrame:
 def _rows_for_training(
     enriched_map: dict[str, pd.DataFrame],
     hits_raw: pd.DataFrame,
+    *,
+    detector_set: frozenset[str],
+    min_positives: int,
 ) -> tuple[pd.DataFrame, np.ndarray] | None:
-    trusted = hits_raw[hits_raw["detector"].isin(TRUSTED_DETECTORS)]
+    trusted = hits_raw[hits_raw["detector"].isin(detector_set)]
     if trusted.empty:
         return None
     pos_keys = trusted[["symbol", "trade_id"]].drop_duplicates()
-    if len(pos_keys) < ML_MIN_POSITIVES:
+    if len(pos_keys) < min_positives:
         return None
 
     sym_to_code = {s: i for i, s in enumerate(sorted(enriched_map.keys()))}
@@ -66,7 +72,7 @@ def _rows_for_training(
         feat_rows.append(d)
         labels.append(1)
 
-    if len(feat_rows) < ML_MIN_POSITIVES:
+    if len(feat_rows) < min_positives:
         return None
 
     pos_ids_by_sym: dict[str, set[str]] = {}
@@ -115,7 +121,20 @@ def ml_rerank(
     if hits_deduped.empty:
         return hits_deduped
 
-    train = _rows_for_training(enriched_map, hits_raw)
+    train = _rows_for_training(
+        enriched_map,
+        hits_raw,
+        detector_set=TRUSTED_DETECTORS,
+        min_positives=ML_MIN_POSITIVES,
+    )
+    if train is None and ML_BROAD_TRUSTED_FALLBACK:
+        broad = frozenset(TRUSTED_DETECTORS | ML_BROAD_TRUSTED_DETECTORS)
+        train = _rows_for_training(
+            enriched_map,
+            hits_raw,
+            detector_set=broad,
+            min_positives=ML_MIN_POSITIVES_BROAD,
+        )
     if train is None:
         return _fallback_cap(hits_deduped)
 
