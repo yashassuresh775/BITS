@@ -373,7 +373,19 @@ def main() -> None:
         df_a, live_err = run_live_binance_submission(live_klines, live_trades)
         primary_src = f"live_binance:t={time.time():.3f}|n={len(df_a)}"
         if live_err:
-            st.error(f"Live Binance pipeline failed: {live_err}")
+            st.error(f"Live pipeline failed: {live_err}")
+        if df_a.empty and BUNDLED_SAMPLE_CSV.is_file():
+            sp = str(BUNDLED_SAMPLE_CSV)
+            mtime_fb = submission_file_mtime(sp)
+            df_fb = load_submission(sp, mtime_fb)
+            if not df_fb.empty:
+                df_a = df_fb
+                primary_src = f"bundled_snapshot:{BUNDLED_SAMPLE_CSV.resolve()}|{mtime_fb}"
+                st.warning(
+                    "Showing **bundled** `dashboard/sample_submission.csv` from the repo (offline snapshot, not live). "
+                    "Latest code falls back to **MEXC** when Binance returns 451 — on Streamlit Cloud use **Manage app → Reboot** "
+                    "after deploy so this build runs."
+                )
     elif upload_primary is not None:
         raw_p = upload_primary.getvalue()
         ck_p = _bytes_cache_key(raw_p, upload_primary.name or "primary.csv")
@@ -423,9 +435,14 @@ def main() -> None:
         return
 
     if primary_mode == "Live Binance":
-        st.success(
-            f"**Live Binance** — {len(df_a)} rows (auto-refresh every **{interval_s}s** reloads fetch + pipeline)."
-        )
+        if str(primary_src).startswith("bundled_snapshot"):
+            st.info(
+                f"**Bundled snapshot** — {len(df_a)} rows (saved CSV from the repo; switch to **Static CSV** or fix live fetch)."
+            )
+        else:
+            st.success(
+                f"**Live pipeline** — {len(df_a)} rows (auto-refresh every **{interval_s}s**; Binance and/or MEXC public data)."
+            )
     elif live and st_autorefresh is not None:
         st.success(
             f"**Auto-refresh:** every **{interval_s}s** — no browser reload needed. "
