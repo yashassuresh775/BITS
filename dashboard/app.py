@@ -3,8 +3,8 @@ Problem 3 submission explorer — run from repo root:
 
   streamlit run dashboard/app.py
 
-**Default:** primary data is **live OKX** (public REST + same pipeline as ``run_p3.py --live``); optional **Binance** via secrets.
-For offline snapshots use **Static CSV** (path, optional Secrets URL, or bundled ``dashboard/sample_submission.csv``).
+**Local default:** primary is **Static CSV** (``submission.csv`` or bundled ``dashboard/sample_submission.csv``).
+Switch to **Live (OKX)** for the same pipeline as ``run_p3.py --live`` (optional **Binance** via secrets / env).
 Optional CSV upload lives under **Advanced** in the sidebar.
 """
 
@@ -305,8 +305,7 @@ def main() -> None:
     _apply_binance_env_from_secrets()
     st.title("BITS — Problem 3 submission explorer")
     st.caption(
-        "Default **Live** uses **OKX** public REST only (fast, one hop). Set secret **`LIVE_SPOT_VENUE=binance`** for Binance only "
-        "(optional **`BINANCE_SPOT_API`**). **Static CSV** = local path, URL, or bundled sample."
+        "Default **Static CSV** = `submission.csv` or bundled sample. **Live (OKX)** = public REST + pipeline (secret **`LIVE_SPOT_VENUE=binance`** for Binance only, optional **`BINANCE_SPOT_API`**)."
     )
 
     secret_primary = _secret_str("PRIMARY_SUBMISSION_URL")
@@ -316,10 +315,10 @@ def main() -> None:
         st.header("Data")
         primary_mode = st.radio(
             "Primary source",
-            ["Live (OKX)", "Static CSV"],
+            ["Static CSV", "Live (OKX)"],
             horizontal=True,
-            key="primary_source_v2",
-            help="Live = OKX (default) or Binance via secrets + pipeline. Static = file path, URL, or upload.",
+            key="primary_source_v3",
+            help="Static = local path, URL, upload, or bundled sample (default for local hosting). Live = OKX or Binance via secrets + pipeline.",
         )
         live_klines = 400
         live_trades = 400

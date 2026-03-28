@@ -1,0 +1,12 @@
+# Local hosting: `make dashboard` or `streamlit run dashboard/app.py`
+# Opens at http://127.0.0.1:8501 (Streamlit Cloud ignores this file for server bind).
+
+[server]
+headless = false
+address = "127.0.0.1"
+port = 8501
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false

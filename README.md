@@ -174,29 +174,31 @@ What it does:
 
 Exit code **1** if any smoke check fails.
 
-## Dashboard (UI)
+## Dashboard (UI) — run locally
 
-Explore **`submission.csv`** in the browser with Streamlit:
+Host on your machine (recommended). From the repo root:
 
 ```bash
 source .venv/bin/activate
-pip install -r requirements.txt   # includes streamlit
+pip install -r requirements.txt   # includes streamlit + streamlit-autorefresh
 python3 -m streamlit run dashboard/app.py
 # or: make dashboard
 ```
 
-**Default primary source** is **Live** (**OKX** only — same in-app pipeline as **`run_p3.py --live`**); no CSV upload required. The app **caches** the live result **90s** (toggle in sidebar) and uses smaller default windows + **45s** auto-refresh. Secret **`LIVE_SPOT_VENUE=binance`** switches to a **single** Binance host. Switch to **Static CSV** for a local path, secret URL, optional upload, or bundled **`dashboard/sample_submission.csv`**. Charts: **symbol**, **violation_type**, optional **`ml_rank_p`**, flags per **day**, filterable table.
+Streamlit opens **`http://127.0.0.1:8501`** (see **`.streamlit/config.toml`**). Generate data first, then refresh the browser:
 
-### Streamlit Community Cloud (hosted)
+```bash
+python3 run_p3.py -o submission.csv
+# optional: python3 run_p3.py --live --live-once -o submission_live.csv
+```
 
-`submission.csv` at repo root is **gitignored**, so that path is often missing on the server. The dashboard supports:
+**Default primary source** is **Static CSV** → **`submission.csv`**; if that file is missing, the app falls back to committed **`dashboard/sample_submission.csv`**. Use sidebar **Live (OKX)** for the same pipeline as **`run_p3.py --live`** (**OKX** only unless you set **`LIVE_SPOT_VENUE=binance`** / **`BINANCE_SPOT_API`** in the environment or **Secrets**). Live mode can **cache** results **~90s** (sidebar toggle). **Auto-refresh** defaults **on** for static files and **off** for live (so long runs are not interrupted); interval default **120s** when enabled.
 
-1. **Live** (default) — **OKX** public REST + pipeline (no upload, **no** backup exchanges). **`LIVE_SPOT_VENUE=binance`** for Binance-only. Toggle **Cache live pipeline (~90s)** / **Clear live cache**. Secrets: **`LIVE_SPOT_VENUE`**, **`BINANCE_SPOT_API`**.  
-2. **Static CSV** — path field, **`PRIMARY_SUBMISSION_URL`** / **`SECOND_SUBMISSION_URL`** in Secrets (see **`.streamlit/secrets.toml.example`**), optional **Advanced → upload**, or committed **`dashboard/sample_submission.csv`** (written by `run_p3.py` unless **`--no-dashboard-sample`**).
+Charts: **symbol**, **violation_type**, optional **`ml_rank_p`**, flags per **day**, filterable table.
 
-**Cloud settings:** set **Main file path** to **`dashboard/app.py`**. **Python dependencies** come from repo-root **`requirements.txt`**.
+### Streamlit Community Cloud (optional)
 
-Example deployment: `https://yashassuresh775-bits-dashboardapp-49yjj9.streamlit.app/` — Live **OKX** works without shipping a CSV; use static options if the venue is unreachable from the host.
+Same app; set **Main file path** to **`dashboard/app.py`**. **`submission.csv`** is usually absent on the server — **Static** mode then uses **`dashboard/sample_submission.csv`** or **`PRIMARY_SUBMISSION_URL`** / upload (see **`.streamlit/secrets.toml.example`**). Choose **Live (OKX)** in the sidebar for API-backed data without committing a CSV.
 
 ## Tuning before submit
 
