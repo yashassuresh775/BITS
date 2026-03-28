@@ -98,7 +98,13 @@ def load_submission_url(url: str, _url_key: str) -> pd.DataFrame:
 
 def _apply_binance_env_from_secrets() -> None:
     """Map optional Streamlit secrets into ``os.environ`` so ``p3.live.binance`` sees them on Cloud."""
-    for key in ("BINANCE_SPOT_API", "BINANCE_INSECURE_SSL", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+    for key in (
+        "BINANCE_SPOT_API",
+        "BINANCE_INSECURE_SSL",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "LIVE_SPOT_VENUE",
+    ):
         if os.environ.get(key, "").strip():
             continue
         try:
@@ -255,8 +261,8 @@ def main() -> None:
     )
     st.title("BITS — Problem 3 submission explorer")
     st.caption(
-        "Default **Live**: Binance public APIs, with **MEXC** fallback if Binance returns 451 from the host (e.g. Streamlit Cloud). "
-        "Switch sidebar to **Static CSV** for local files, bundled sample, or a secret URL."
+        "Default **Live**: tries **Binance**, then **MEXC**, then **OKX** so hosted apps still get market data when one venue blocks. "
+        "Switch to **Static CSV** for local files, bundled sample, or a secret URL."
     )
 
     secret_primary = _secret_str("PRIMARY_SUBMISSION_URL")
@@ -274,8 +280,9 @@ def main() -> None:
         live_trades = 1000
         if primary_mode == "Live Binance":
             st.markdown(
-                "Same detectors as `run_p3.py --live`. Tries **Binance** (US → … → .com), then **MEXC** public API "
-                "if Binance returns 451/403 (common from cloud IPs). Set `BINANCE_SPOT_API` only to pin Binance."
+                "Same detectors as `run_p3.py --live`. Live data: **Binance** (several hosts) → **MEXC** → **OKX** "
+                "(public REST, no key). Secrets: `BINANCE_SPOT_API` pins Binance; `LIVE_SPOT_VENUE=okx` (or `mexc`) "
+                "forces one venue."
             )
             live_klines = st.number_input(
                 "Klines / symbol",
@@ -383,7 +390,7 @@ def main() -> None:
                 primary_src = f"bundled_snapshot:{BUNDLED_SAMPLE_CSV.resolve()}|{mtime_fb}"
                 st.warning(
                     "Showing **bundled** `dashboard/sample_submission.csv` from the repo (offline snapshot, not live). "
-                    "Latest code falls back to **MEXC** when Binance returns 451 — on Streamlit Cloud use **Manage app → Reboot** "
+                    "Latest code tries **MEXC** and **OKX** when Binance is blocked — on Streamlit Cloud use **Manage app → Reboot** "
                     "after deploy so this build runs."
                 )
     elif upload_primary is not None:
@@ -441,7 +448,7 @@ def main() -> None:
             )
         else:
             st.success(
-                f"**Live pipeline** — {len(df_a)} rows (auto-refresh every **{interval_s}s**; Binance and/or MEXC public data)."
+                f"**Live pipeline** — {len(df_a)} rows (auto-refresh every **{interval_s}s**; Binance / MEXC / OKX public data)."
             )
     elif live and st_autorefresh is not None:
         st.success(
