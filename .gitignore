@@ -1,0 +1,35 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets & local env (never commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials.json
+*credentials*.json
+
+# Hackathon data (large + distribution-sensitive)
+data/student-pack/*
+!data/student-pack/.gitkeep
+
+# Generated submission (regenerate with run_p3.py; may reflect competitive output)
+submission.csv
+*.submission.csv
