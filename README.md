@@ -107,7 +107,7 @@ python3 run_p3.py --live --live-once -o submission.csv
 python3 run_p3.py --live --live-interval 15 --live-klines 600 --live-trades 1000 -o submission.csv
 ```
 
-**Endpoints:** without **`BINANCE_SPOT_API`**, the client tries **`api.binance.com`**, then **`api.binance.us`** on HTTP **451** (or connection errors). Pin a single host if you want:
+**Endpoints:** without **`BINANCE_SPOT_API`**, the client tries **`api.binance.us`** first, then **`api.binance.com`** (many US / cloud IPs get **451** on `.com` only). If you pin **`api.binance.com`** in env, **`.us` is still tried** after 403/451. To use exactly one host, set **`BINANCE_SPOT_API`** to that base only (e.g. Binance.US only):
 
 ```bash
 export BINANCE_SPOT_API=https://api.binance.us/api/v3
@@ -186,7 +186,7 @@ python3 -m streamlit run dashboard/app.py
 
 `submission.csv` at repo root is **gitignored**, so that path is often missing on the server. The dashboard supports:
 
-1. **Live Binance** (default) — fetches and runs the pipeline on each refresh (no upload). If `api.binance.com` returns **HTTP 451**, the client automatically retries **`api.binance.us`** (same REST paths). Override with **`BINANCE_SPOT_API`** in env or Streamlit secrets if you need another host.  
+1. **Live Binance** (default) — fetches and runs the pipeline on each refresh (no upload). Default order is **`api.binance.us`** then **`api.binance.com`**; **403/451** or connection errors advance to the next base. Pin **`BINANCE_SPOT_API`** only if you need a single fixed host.  
 2. **Static CSV** — path field, **`PRIMARY_SUBMISSION_URL`** / **`SECOND_SUBMISSION_URL`** in Secrets (see **`.streamlit/secrets.toml.example`**), optional **Advanced → upload**, or committed **`dashboard/sample_submission.csv`** (written by `run_p3.py` unless **`--no-dashboard-sample`**).
 
 **Cloud settings:** set **Main file path** to **`dashboard/app.py`**. **Python dependencies** come from repo-root **`requirements.txt`**.

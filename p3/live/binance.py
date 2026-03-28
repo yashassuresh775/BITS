@@ -32,22 +32,34 @@ DEFAULT_UA = "BITS-p3-live/1.0"
 
 _resolved_spot_base: str | None = None
 
+_BINANCE_US = "https://api.binance.us/api/v3"
+_BINANCE_COM = "https://api.binance.com/api/v3"
+
 
 def _spot_bases() -> list[str]:
-    """If ``BINANCE_SPOT_API`` is set, only that base. Else try .com then .us (451 / geo)."""
+    """
+    Hosts to try in order (HTTP 451 / connection errors move to the next).
+
+    - **Unset** ``BINANCE_SPOT_API``: **.us first**, then .com (Streamlit Cloud / many US IPs get 451 on .com only).
+    - **Pinned** to ``api.binance.com``: same URL plus **.us** so secrets that point at .com still auto-fallback.
+    - **Pinned** to anything else: that URL only (no extra hops).
+    """
     env = os.environ.get("BINANCE_SPOT_API", "").strip().rstrip("/")
-    if env:
-        return [env]
-    return [
-        "https://api.binance.com/api/v3",
-        "https://api.binance.us/api/v3",
-    ]
+    if not env:
+        return [_BINANCE_US, _BINANCE_COM]
+    bases = [env]
+    if "api.binance.com" in env and "binance.us" not in env.lower():
+        bases.append(_BINANCE_US)
+    return bases
+
+
+def _should_try_next_host(err: urllib.error.HTTPError) -> bool:
+    return err.code in (403, 451)
 
 
 def binance_spot_get(path_with_query: str, *, timeout: float = 45.0) -> object:
     """
-    GET ``{base}/{path}`` with automatic fallback when ``BINANCE_SPOT_API`` is unset:
-    HTTP **451** or connection errors try the next base (typically .com → .us).
+    GET ``{base}/{path}`` with fallback across `_spot_bases()` on HTTP **403/451** or connection errors.
     """
     global _resolved_spot_base
     rel = path_with_query.lstrip("/")
@@ -59,7 +71,7 @@ def binance_spot_get(path_with_query: str, *, timeout: float = 45.0) -> object:
         try:
             return _http_get_json(url, timeout=timeout)
         except urllib.error.HTTPError as e:
-            if e.code == 451 and multi:
+            if _should_try_next_host(e) and multi:
                 _resolved_spot_base = None
             else:
                 raise
@@ -78,7 +90,7 @@ def binance_spot_get(path_with_query: str, *, timeout: float = 45.0) -> object:
             return out
         except urllib.error.HTTPError as e:
             last_err = e
-            if e.code == 451 and multi and base != bases[-1]:
+            if _should_try_next_host(e) and multi and base != bases[-1]:
                 continue
             raise
         except (urllib.error.URLError, TimeoutError, OSError) as e:

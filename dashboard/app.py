@@ -274,8 +274,8 @@ def main() -> None:
         live_trades = 1000
         if primary_mode == "Live Binance":
             st.markdown(
-                "Same API stack as `run_p3.py --live`. If `binance.com` is geo-blocked (HTTP 451), "
-                "the app retries **binance.us** automatically. Set `BINANCE_SPOT_API` in secrets only if you need a custom host."
+                "Same API stack as `run_p3.py --live`. Requests try **binance.us** first, then **binance.com** "
+                "(403/451 falls through). Set `BINANCE_SPOT_API` in secrets only to pin one host."
             )
             live_klines = st.number_input(
                 "Klines / symbol",
