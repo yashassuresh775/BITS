@@ -100,7 +100,7 @@ def _prep_ohlcv_features(ohlcv: pd.DataFrame) -> pd.DataFrame:
         x["volume_z"] = (x["volume"] - x["vol_15d_mean"]) / x["vol_15d_std"].replace(0, np.nan)
         return x
 
-    return g.apply(add_features)
+    return g.apply(add_features, include_groups=False)
 
 
 def _last_n_trading_dates_before(

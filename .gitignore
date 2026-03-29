@@ -33,6 +33,10 @@ credentials.json
 data/student-pack/*
 !data/student-pack/.gitkeep
 
+# Equity pack CSVs (copy from student-pack locally; keep README only)
+data/equity-data/*
+!data/equity-data/README.txt
+
 # Binance backfill (large; regenerate with scripts/fetch_binance_history.py)
 data/binance-hist/*
 !data/binance-hist/.gitkeep

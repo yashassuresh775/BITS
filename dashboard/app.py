@@ -1,11 +1,10 @@
 """
-Problem 3 submission explorer — run from repo root:
+BITS surveillance UI — run from repo root:
 
   streamlit run dashboard/app.py
 
-**Local default:** primary is **Static CSV** (``submission.csv`` or bundled ``dashboard/sample_submission.csv``).
-Switch to **Live (API)** for the same pipeline as ``run_p3.py --live`` (OKX / Binance / both via ``LIVE_SPOT_VENUE``).
-Optional CSV upload lives under **Advanced** in the sidebar.
+**Tabs:** P1 order-book alerts, P2 EDGAR signals, P3 crypto submission (same patterns: path / upload / secrets URL, optional auto-refresh).
+P3 **Live (API)** uses ``run_p3.py --live`` (``LIVE_SPOT_VENUE``). P3 static defaults to ``submission.csv`` or bundled ``dashboard/sample_submission.csv``.
 """
 
 from __future__ import annotations
@@ -33,6 +32,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from p3.live.binance import live_spot_venue
+
+from dashboard.tab_p1 import render_p1_tab
+from dashboard.tab_p2 import render_p2_tab
 
 DEFAULT_CSV = REPO_ROOT / "submission.csv"
 BUNDLED_SAMPLE_CSV = REPO_ROOT / "dashboard" / "sample_submission.csv"
@@ -296,14 +298,9 @@ def render_submission_panel(
     st.dataframe(disp[cols], use_container_width=True, height=420)
 
 
-def main() -> None:
-    st.set_page_config(
-        page_title="BITS — Problem 3 dashboard",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
+def render_problem3_tab() -> None:
     _apply_binance_env_from_secrets()
-    st.title("BITS — Problem 3 submission explorer")
+    st.subheader("P3 — Crypto submission")
     st.caption(
         "Default **Static CSV** = `submission.csv` or bundled sample. **Live (API)** = public REST + pipeline. "
         "Venue: **`LIVE_SPOT_VENUE`** = `okx` (default), `binance`, or `both` (OKX+Binance merged; optional **`BINANCE_SPOT_API`**)."
@@ -312,13 +309,13 @@ def main() -> None:
     secret_primary = _secret_str("PRIMARY_SUBMISSION_URL")
     secret_second = _secret_str("SECOND_SUBMISSION_URL")
 
-    with st.sidebar:
-        st.header("Data")
+    with st.expander("P3 — Data & refresh", expanded=True):
+        st.markdown("##### Data source")
         primary_mode = st.radio(
             "Primary source",
             ["Static CSV", "Live (API)"],
             horizontal=True,
-            key="primary_source_v4",
+            key="p3_primary_src",
             help="Static = local path, URL, upload, or bundled sample. Live = `run_p3.py --live` pipeline; venue from `LIVE_SPOT_VENUE` (okx / binance / both).",
         )
         live_klines = 400
@@ -333,9 +330,10 @@ def main() -> None:
             use_live_cache = st.toggle(
                 "Cache live pipeline (~90s)",
                 value=True,
+                key="p3_live_cache",
                 help="Reuses the last successful run for 90s so auto-refresh does not redo fetch+ML every few seconds.",
             )
-            if use_live_cache and st.button("Clear live cache", help="Force a full refetch on next run."):
+            if use_live_cache and st.button("Clear live cache", help="Force a full refetch on next run.", key="p3_clear_live"):
                 run_live_binance_submission_cached.clear()
                 st.rerun()
             live_klines = st.number_input(
@@ -345,6 +343,7 @@ def main() -> None:
                 value=400,
                 step=50,
                 help="Smaller = faster load (default 400). Max 1000.",
+                key="p3_klines",
             )
             live_trades = st.number_input(
                 "Agg trades / symbol",
@@ -353,6 +352,7 @@ def main() -> None:
                 value=400,
                 step=50,
                 help="Smaller = faster (default 400).",
+                key="p3_trades",
             )
             st.caption(
                 "First live run is often **30–90s**. Keep **Auto-refresh off** until you see charts, or set **Refresh every ≥ 120s**."
@@ -369,13 +369,13 @@ def main() -> None:
             upload_primary = st.file_uploader(
                 "Upload primary CSV",
                 type=["csv"],
-                key="upload_primary",
+                key="p3_upload_primary",
                 help="Only used for **Static CSV** primary mode.",
             )
             upload_second = st.file_uploader(
                 "Upload second CSV (compare tab)",
                 type=["csv"],
-                key="upload_second",
+                key="p3_upload_second",
             )
         if secret_primary:
             st.caption("Secrets: `PRIMARY_SUBMISSION_URL` is set (used in Static CSV mode).")
@@ -386,18 +386,21 @@ def main() -> None:
             value=str(DEFAULT_CSV),
             disabled=(primary_mode == "Live (API)"),
             help="Ignored when primary is Live.",
+            key="p3_path_primary",
         )
         csv_path_b = st.text_input(
             "Second CSV path (optional — compare tab)",
             value="",
             placeholder="submission_live.csv",
             help="Local path when not using second upload or SECOND_SUBMISSION_URL.",
+            key="p3_path_second",
         )
         st.divider()
         _is_live = primary_mode == "Live (API)"
         live = st.toggle(
             "Auto-refresh (no manual browser refresh)",
             value=not _is_live,
+            key="p3_page_autorefresh",
             help="**Live:** default **off** so the browser does not reload while the 30–90s pipeline runs (reloads cancel the run → no charts). Turn on after the first load or set Refresh ≥ 120s. **Static:** on by default.",
         )
         interval_s = st.slider(
@@ -408,6 +411,7 @@ def main() -> None:
             step=15,
             disabled=not live,
             help="Must be **longer** than one live pipeline run (~30–90s) or refreshes interrupt loading and graphs never appear.",
+            key="p3_refresh_sec",
         )
         st.caption(f"Last run: **{datetime.now().strftime('%H:%M:%S')}**")
         st.divider()
@@ -420,6 +424,7 @@ def main() -> None:
         reset_on_change = st.toggle(
             "Reset symbol & type filters when CSV updates",
             value=True,
+            key="p3_reset_filters",
             help="After path/mtime/row-count changes (e.g. new `run_p3` with all 8 pairs), selections go back to **all** symbols and types so you do not stay stuck on ETH/USDC/XRP only.",
         )
 
@@ -427,7 +432,7 @@ def main() -> None:
         if st_autorefresh is not None:
             st_autorefresh(interval=int(interval_s * 1000), limit=None, key="p3_submission_live")
         else:
-            st.sidebar.warning("Install `streamlit-autorefresh` for live mode (`pip install -r requirements.txt`).")
+            st.warning("Install `streamlit-autorefresh` for live mode (`pip install -r requirements.txt`).")
 
     # Primary: Live (API) | upload > secret URL > local path > bundled sample
     df_a = pd.DataFrame()
@@ -435,7 +440,7 @@ def main() -> None:
     if primary_mode == "Live (API)":
         st.info(
             "**Live** loads in **~30–90s** the first time. **Metrics and charts show below** when the run finishes. "
-            "If the main area stays empty, turn **Auto-refresh** **off** in the sidebar — short refresh intervals reload the page and **cancel** the run before charts render."
+            "If the main area stays empty, turn **Auto-refresh** **off** in **P3 — Data & refresh** — short refresh intervals reload the page and **cancel** the run before charts render."
         )
         if use_live_cache:
             df_a, live_err = run_live_binance_submission_cached(
@@ -525,16 +530,22 @@ def main() -> None:
 
     sig_a = f"{primary_src}|n={len(df_a)}"
 
-    cbtn1, cbtn2 = st.sidebar.columns(2)
+    cbtn1, cbtn2 = st.columns(2)
     with cbtn1:
-        if st.button("All sym · P1", help="Primary tab: select every symbol in the CSV", key="btn_all_sym_p1"):
-            st.session_state["p1_sym"] = sorted(df_a["symbol"].dropna().unique().tolist())
+        if st.button(
+            "All symbols · primary CSV",
+            help="Primary compare tab: select every symbol",
+            key="p3_btn_all_sym_primary",
+        ):
+            st.session_state["crypto_a_sym"] = sorted(df_a["symbol"].dropna().unique().tolist())
             st.rerun()
     with cbtn2:
         if not df_b.empty and st.button(
-            "All sym · P2", help="Second tab: select every symbol", key="btn_all_sym_p2"
+            "All symbols · second CSV",
+            help="Second compare tab: select every symbol",
+            key="p3_btn_all_sym_second",
         ):
-            st.session_state["p2_sym"] = sorted(df_b["symbol"].dropna().unique().tolist())
+            st.session_state["crypto_b_sym"] = sorted(df_b["symbol"].dropna().unique().tolist())
             st.rerun()
 
     if (path_b or upload_second is not None or secret_second) and df_b.empty:
@@ -544,27 +555,45 @@ def main() -> None:
     if df_b.empty:
         render_submission_panel(
             df_a,
-            key_prefix="p1_",
+            key_prefix="crypto_a_",
             data_signature=sig_a,
             reset_filters_on_csv_change=reset_on_change,
         )
     else:
         sig_b = f"{second_src}|n={len(df_b)}"
-        tab_a, tab_b = st.tabs(["Primary (e.g. student pack)", "Second (e.g. Binance live)"])
+        tab_a, tab_b = st.tabs(["Primary CSV (e.g. student pack)", "Second CSV (e.g. live)"])
         with tab_a:
             render_submission_panel(
                 df_a,
-                key_prefix="p1_",
+                key_prefix="crypto_a_",
                 data_signature=sig_a,
                 reset_filters_on_csv_change=reset_on_change,
             )
         with tab_b:
             render_submission_panel(
                 df_b,
-                key_prefix="p2_",
+                key_prefix="crypto_b_",
                 data_signature=sig_b,
                 reset_filters_on_csv_change=reset_on_change,
             )
+
+
+def main() -> None:
+    st.set_page_config(
+        page_title="BITS — Surveillance dashboard",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    st.title("BITS — Trade surveillance")
+    st.caption("**P1** order-book alerts · **P2** EDGAR / insider signals · **P3** crypto submission — open a tab below.")
+
+    t1, t2, t3 = st.tabs(["P1 — Order book", "P2 — EDGAR", "P3 — Crypto"])
+    with t1:
+        render_p1_tab()
+    with t2:
+        render_p2_tab()
+    with t3:
+        render_problem3_tab()
 
 
 if __name__ == "__main__":

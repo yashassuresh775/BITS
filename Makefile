@@ -1,7 +1,7 @@
 # macOS often has no `python` on PATH — use this Makefile or `python3` / `.venv/bin/python`.
 PY ?= $(shell test -x .venv/bin/python && echo .venv/bin/python || command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)
 
-.PHONY: run p1 p2 dual live-once dashboard benchmark fetch-hist eda-stats
+.PHONY: run p1 p2 run-all dual live-once dashboard benchmark fetch-hist eda-stats
 
 run:
 	$(PY) run_p3.py -o submission.csv
@@ -16,6 +16,15 @@ p1:
 p2:
 	@test -n "$(P2_ROOT)" || (echo "Set P2_ROOT=/path/to/equity-pack" && exit 1)
 	$(PY) run_p2.py --data-root "$(P2_ROOT)" -o p2_signals.csv
+
+# P3 (crypto ./data/student-pack) + benchmark + P1/P2 (same equity folder for both).
+# Example: make run-all EQUITY_ROOT="$HOME/Downloads/student-pack/equity"
+run-all:
+	@test -n "$(EQUITY_ROOT)" || (echo "Set EQUITY_ROOT=/path/to/equity (folder with market_data.csv, ohlcv.csv, trade_data.csv)" && exit 1)
+	$(PY) run_p3.py -o submission.csv
+	$(PY) scripts/benchmark_p3.py --runs 1
+	$(PY) run_p1.py --data-root "$(EQUITY_ROOT)" -o p1_alerts.csv
+	$(PY) run_p2.py --data-root "$(EQUITY_ROOT)" -o p2_signals.csv
 
 dual:
 	$(PY) run_p3.py --dual

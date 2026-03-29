@@ -13,6 +13,34 @@ python run_p2.py --data-root path/to/equity-data -o p2_signals.csv --start-date 
 
 Problem 2 calls the SEC EDGAR API (`requests` in **`requirements.txt`**). Use `make p1 P1_ROOT=...` / `make p2 P2_ROOT=...` if your Makefile defines those targets.
 
+**Run P3 + benchmark + P1 + P2 in one go (correct shell — no `--` after `make`):**
+
+```bash
+cd /path/to/BITS
+source .venv/bin/activate
+
+# P3 — needs ./data/student-pack/ (crypto CSVs); writes submission.csv (gitignored)
+make run
+make benchmark
+
+# P1 + P2 — same directory must contain market_data.csv, ohlcv.csv, trade_data.csv
+EQUITY_ROOT="$HOME/Downloads/student-pack/equity"   # change if your pack moved
+make p1 P1_ROOT="$EQUITY_ROOT"
+make p2 P2_ROOT="$EQUITY_ROOT"
+```
+
+Or a single Make target (same **`EQUITY_ROOT`** for P1 and P2):
+
+```bash
+make run-all EQUITY_ROOT="$HOME/Downloads/student-pack/equity"
+```
+
+**Common mistake:** do not append text like `-- comment` on the same line as `make p2 ...` — the shell may treat `--` as arguments to **`make`**, not a comment. Use a new line and `# comment` instead.
+
+**Cursor / sandbox:** if `make run` fails with `PermissionError` on `submission.csv`, run the same commands in your **local terminal** (outside a read-only agent sandbox).
+
+**P2 offline:** cache filings once, then `python3 run_p2.py --data-root "$EQUITY_ROOT" --skip-edgar --filings-cache path/to/filings.csv -o p2_signals.csv`.
+
 ---
 
 ## Problem 3 — Approach (what we built)
@@ -198,7 +226,9 @@ Exit code **1** if any smoke check fails.
 
 ## Dashboard (UI) — run locally
 
-Host on your machine (recommended). From the repo root:
+One Streamlit app with **three tabs**: **P1** (order-book alerts), **P2** (EDGAR + signals), **P3** (crypto submission). Each tab supports **path / upload / optional Secrets URL**, filters, charts, and optional **auto-refresh** (same overall pattern as the former P3-only UI).
+
+From the repo root:
 
 ```bash
 source .venv/bin/activate
@@ -207,20 +237,22 @@ python3 -m streamlit run dashboard/app.py
 # or: make dashboard
 ```
 
-Streamlit opens **`http://127.0.0.1:8501`** (see **`.streamlit/config.toml`**). Generate data first, then refresh the browser:
+Streamlit opens **`http://127.0.0.1:8501`** (see **`.streamlit/config.toml`**). Generate outputs first, then refresh:
 
 ```bash
 python3 run_p3.py -o submission.csv
-# optional: python3 run_p3.py --live --live-once -o submission_live.csv
+make p1 P1_ROOT=/path/to/equity && make p2 P2_ROOT=/path/to/equity   # optional
 ```
 
-**Default primary source** is **Static CSV** → **`submission.csv`**; if that file is missing, the app falls back to committed **`dashboard/sample_submission.csv`**. Sidebar **Live (API)** runs the same pipeline as **`run_p3.py --live`**; venue is **`LIVE_SPOT_VENUE`**: **`okx`**, **`binance`**, or **`both`** (plus optional **`BINANCE_SPOT_API`** in env or **Secrets**). Live mode can **cache** results **~90s** (sidebar toggle). **Auto-refresh** defaults **on** for static files and **off** for live; interval default **120s** when enabled.
+**P3 tab:** default **Static CSV** → **`submission.csv`**; fallback **`dashboard/sample_submission.csv`**. **Live (API)** = **`run_p3.py --live`**; **`LIVE_SPOT_VENUE`**: **`okx`**, **`binance`**, or **`both`**. Controls live in the **P3 — Data & refresh** expander (not a separate sidebar). Live cache **~90s**; **auto-refresh** defaults **on** for static and **off** for live.
 
-Charts: **symbol**, **violation_type**, optional **`ml_rank_p`**, flags per **day**, filterable table.
+**P1 tab:** static **`p1_alerts.csv`**, **run from folder** (`market_data.csv`, optional `trade_data.csv`), or **Live (poll CSV URLs)** (HTTPS raw CSVs). Secrets **`P1_ALERTS_URL`**, optional **`P1_LIVE_MARKET_URL`** / **`P1_LIVE_TRADE_URL`**. Default equity folder follows **`EQUITY_ROOT`** (or **`EQUITY_DATA_STREAMLIT_DEFAULT`**) if set.
+
+**P2 tab:** static **`p2_signals.csv`** or **run pipeline** (`ohlcv.csv` + `trade_data.csv`). With live EDGAR, choose an **EDGAR re-fetch interval** (time-bucketed cache); with **skip EDGAR**, cache tracks local file mtimes. Secret **`P2_SIGNALS_URL`**. Same **`EQUITY_ROOT`** default as P1.
 
 ### Streamlit Community Cloud (optional)
 
-Same app; set **Main file path** to **`dashboard/app.py`**. **`submission.csv`** is usually absent on the server — **Static** mode then uses **`dashboard/sample_submission.csv`** or **`PRIMARY_SUBMISSION_URL`** / upload (see **`.streamlit/secrets.toml.example`**). Choose **Live (API)** in the sidebar for API-backed data; set **`LIVE_SPOT_VENUE`** in Secrets as needed (`okx`, `binance`, or `both`).
+**Main file path:** **`dashboard/app.py`**. Use Secrets for **`PRIMARY_SUBMISSION_URL`**, **`P1_ALERTS_URL`**, **`P2_SIGNALS_URL`**, **`P1_LIVE_*`**, **`LIVE_SPOT_VENUE`**, etc. (see **`.streamlit/secrets.toml.example`**). P2 **Run pipeline** hits the SEC network from the host (respect rate limits).
 
 ## Tuning before submit
 
@@ -245,12 +277,12 @@ Same app; set **Main file path** to **`dashboard/app.py`**. **`submission.csv`**
 | `p3/live/okx.py` | Public OKX v5 REST → same bar/trade shape as live pipeline |
 | `p3/live/binance.py` | Live fetch (OKX or single-host Binance); historical multi-host GET for backfill |
 | `run_p3.py` | CLI |
-| `Makefile` | `make run` / `make p1` / `make p2` / `make dual` / `make dashboard` / `make fetch-hist` (uses `.venv/bin/python` if present) |
+| `Makefile` | `make run` / `make benchmark` / `make p1` / `make p2` / `make run-all EQUITY_ROOT=...` / `make dual` / `make dashboard` / `make fetch-hist` (uses `.venv/bin/python` if present) |
 | `run_p1.py` / `run_p2.py` | Equity Problem 1 & 2 CLIs → `p1_alerts.csv`, `p2_signals.csv` |
 | `scripts/fetch_binance_history.py` | Paginated historical klines + agg trades → `data/binance-hist/` |
 | `scripts/eda_pack_stats.py` | Vectorised EDA report: notionals, peg, BAT hours, major-pair HOD (`make eda-stats`) |
 | `scripts/benchmark_p3.py` | Example timed run + submission smoke tests |
-| `dashboard/app.py` | Streamlit UI (local path, **upload**, or **Secrets** URLs — Cloud-ready) |
+| `dashboard/app.py` | Streamlit **P1 \| P2 \| P3** tabs (`tab_p1.py`, `tab_p2.py` + P3 explorer) |
 | `.streamlit/secrets.toml.example` | Template for `PRIMARY_SUBMISSION_URL` / `SECOND_SUBMISSION_URL` on Streamlit Cloud |
 
 ## Disclaimer

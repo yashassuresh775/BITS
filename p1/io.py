@@ -128,11 +128,14 @@ def _pick(df: pd.DataFrame, names: list[str]) -> str:
     raise ValueError(f"Missing column; tried {names}")
 
 
-def load_trades_per_minute(trades_path: str | None) -> pd.DataFrame | None:
+def load_trades_per_minute(trades_path: str | pd.DataFrame | None) -> pd.DataFrame | None:
     """Optional: aggregate trade quantity per (sec_id, minute) for buy-aggression remarks."""
     if trades_path is None:
         return None
-    t = pd.read_csv(trades_path)
+    if isinstance(trades_path, pd.DataFrame):
+        t = trades_path.copy()
+    else:
+        t = pd.read_csv(trades_path)
     td = None
     for c in ("trade_date", "TradeDate", "timestamp", "datetime"):
         if c in t.columns:
