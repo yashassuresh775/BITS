@@ -20,6 +20,19 @@ P2_DEFAULT_CSV = REPO_ROOT / "p2_signals.csv"
 P2_DEFAULT_DATA = REPO_ROOT / "data" / "equity-data"
 P2_MIN_COLS = ("sec_id", "event_date", "remarks")
 
+# Put key columns before long ``headline`` / ``remarks`` so they stay visible without horizontal scroll.
+P2_TABLE_COLUMN_ORDER = (
+    "sec_id",
+    "event_date",
+    "event_type",
+    "source_url",
+    "pre_drift_flag",
+    "suspicious_window_start",
+    "headline",
+    "remarks",
+    "time_to_run",
+)
+
 
 def default_equity_folder() -> str:
     """Prefer env over bundled ``data/equity-data`` (see ``data/equity-data/README.txt``)."""
@@ -384,8 +397,9 @@ def render_p2_tab() -> None:
         w["_w"] = w["event_date"].dt.to_period("W").astype(str)
         st.bar_chart(w.groupby("_w").size())
 
-    cols = [c for c in df.columns]
-    table = view[cols] if len(view) else chart_df[cols]
+    ordered = [c for c in P2_TABLE_COLUMN_ORDER if c in df.columns]
+    ordered += [c for c in df.columns if c not in ordered]
+    table = view[ordered] if len(view) else chart_df[ordered]
     col_cfg = {}
     if "source_url" in table.columns:
         col_cfg["source_url"] = ccfg.LinkColumn("source_url", display_text="Open")
