@@ -38,6 +38,38 @@ def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
+SEC_SEARCH_FALLBACK_URL = "https://www.sec.gov/edgar/search/"
+
+
+def coerce_p2_signal_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure ``source_url``, ``suspicious_window_start``, and ``pre_drift_flag`` are always
+    populated for CSV round-trip and Streamlit ``st.dataframe`` (NaN becomes ``None`` in UI).
+    """
+    if df.empty:
+        return df
+    out = df.copy()
+    fb = SEC_SEARCH_FALLBACK_URL
+    if "source_url" not in out.columns:
+        out["source_url"] = fb
+    else:
+        raw = out["source_url"]
+        strv = raw.fillna("").astype(str).str.strip()
+        bad = raw.isna() | strv.isin(("", "nan", "None", "NaN", "<NA>", "null"))
+        out["source_url"] = strv.mask(bad, fb)
+    ed = pd.to_datetime(out["event_date"], errors="coerce")
+    fb_sw = (ed - pd.Timedelta(days=7)).dt.strftime("%Y-%m-%d").fillna("n/a")
+    if "suspicious_window_start" not in out.columns:
+        out["suspicious_window_start"] = fb_sw
+    else:
+        sw = pd.to_datetime(out["suspicious_window_start"], errors="coerce")
+        sw_str = sw.dt.strftime("%Y-%m-%d")
+        out["suspicious_window_start"] = sw_str.where(sw.notna(), fb_sw).fillna("n/a")
+    if "pre_drift_flag" in out.columns:
+        out["pre_drift_flag"] = pd.to_numeric(out["pre_drift_flag"], errors="coerce").fillna(0).astype(int)
+    return out
+
+
 def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     td = _pick_col(out, _OHLCV_ALIASES["trade_date"])
@@ -112,6 +144,19 @@ def _last_n_trading_dates_before(
     return [pd.Timestamp(x) for x in below[-n:]]
 
 
+def _trading_dates_before(dates: np.ndarray, cutoff: pd.Timestamp) -> list[pd.Timestamp]:
+    """All OHLCV dates strictly before filing (ascending)."""
+    ts = pd.Timestamp(cutoff).normalize()
+    below = dates[dates < np.datetime64(ts)]
+    return [pd.Timestamp(x) for x in below]
+
+
+def _calendar_pre_window(file_date: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Fallback T-7..T-1 calendar (not trading) when OHLCV is missing or empty."""
+    fd = pd.Timestamp(file_date).normalize()
+    return fd - pd.Timedelta(days=7), fd - pd.Timedelta(days=1)
+
+
 def compute_pre_drift_flags(
     ohlcv_feat: pd.DataFrame,
     filings: pd.DataFrame,
@@ -129,13 +174,15 @@ def compute_pre_drift_flags(
         fsub = filings[filings["sec_id"] == sec]
         if fo.empty:
             for _, frow in fsub.iterrows():
+                fd = pd.Timestamp(frow["file_date"]).normalize()
+                ws, we = _calendar_pre_window(fd)
                 rows.append(
                     {
                         **frow.to_dict(),
                         "pre_drift_flag": 0,
-                        "suspicious_window_start": pd.NaT,
-                        "_pre_window_end": pd.NaT,
-                        "remarks": f"No OHLCV rows for sec_id={sec}.",
+                        "suspicious_window_start": ws,
+                        "_pre_window_end": we,
+                        "remarks": f"No OHLCV rows for sec_id={sec}; window is calendar T-7..T-1 for trade scan.",
                         "volume_z_T-1": np.nan,
                         "volume_z_T-2": np.nan,
                         "car_5d": np.nan,
@@ -147,16 +194,60 @@ def compute_pre_drift_flags(
             fd = pd.Timestamp(frow["file_date"]).normalize()
             last5 = _last_n_trading_dates_before(dates, fd, 5)
             if len(last5) < 5:
+                prior = _trading_dates_before(dates, fd)
+                if len(prior) == 0:
+                    ws, we = _calendar_pre_window(fd)
+                    rows.append(
+                        {
+                            **frow.to_dict(),
+                            "pre_drift_flag": 0,
+                            "suspicious_window_start": ws,
+                            "_pre_window_end": we,
+                            "remarks": (
+                                f"sec_id {sec}: no trading days before filing {fd.date()} in OHLCV; "
+                                "window is calendar T-7..T-1 for trade scan."
+                            ),
+                            "volume_z_T-1": np.nan,
+                            "volume_z_T-2": np.nan,
+                            "car_5d": np.nan,
+                        }
+                    )
+                    continue
+                lastk = prior[-min(5, len(prior)) :]
+                suspicious_start = lastk[0]
+                pre_end = lastk[-1]
+                sub = fo.set_index("trade_date")
+                d_t1, d_t2 = lastk[-1], lastk[-2] if len(lastk) >= 2 else lastk[-1]
+                vz1 = float(sub.loc[d_t1, "volume_z"]) if d_t1 in sub.index else np.nan
+                vz2 = float(sub.loc[d_t2, "volume_z"]) if d_t2 in sub.index else np.nan
+                car = 0.0
+                for d in lastk:
+                    if d not in sub.index:
+                        continue
+                    r = float(sub.loc[d, "daily_ret"])
+                    if np.isnan(r):
+                        continue
+                    mu = float(sub.loc[d, "ret_15d_mean"])
+                    if np.isnan(mu):
+                        mu = 0.0
+                    car += r - mu
+                sig = float(sub.loc[d_t1, "ret_15d_std"]) if d_t1 in sub.index else np.nan
+                car_thresh = 2.0 * (np.sqrt(5.0) * sig) if sig and not np.isnan(sig) else np.inf
+                vol_hit = (not np.isnan(vz1) and vz1 > 3) or (not np.isnan(vz2) and vz2 > 3)
+                car_hit = bool(not np.isnan(car) and not np.isnan(sig) and car > car_thresh)
+                pre_flag = int(vol_hit or car_hit)
                 rows.append(
                     {
                         **frow.to_dict(),
-                        "pre_drift_flag": 0,
-                        "suspicious_window_start": pd.NaT,
-                        "_pre_window_end": pd.NaT,
-                        "remarks": f"sec_id {sec}: fewer than 5 trading days before filing {fd.date()} — insufficient history.",
-                        "volume_z_T-1": np.nan,
-                        "volume_z_T-2": np.nan,
-                        "car_5d": np.nan,
+                        "pre_drift_flag": pre_flag,
+                        "suspicious_window_start": suspicious_start,
+                        "_pre_window_end": pre_end,
+                        "remarks": (
+                            f"Partial history ({len(lastk)} trading days before filing vs 5 ideal). "
+                        ),
+                        "volume_z_T-1": vz1,
+                        "volume_z_T-2": vz2,
+                        "car_5d": car,
                     }
                 )
                 continue
@@ -201,7 +292,7 @@ def enrich_remarks_with_trades(
     flagged: pd.DataFrame,
     trades: pd.DataFrame,
 ) -> pd.Series:
-    """Append trade-level hints: traders spiking size in T-5..T-1 vs their history."""
+    """Use ``trade_data`` ``trader_id`` + notional in the pre-filing window vs prior history (organizer tip)."""
     remarks = []
     for _, row in flagged.iterrows():
         base = str(row.get("remarks", "") or "")
@@ -251,6 +342,8 @@ def enrich_remarks_with_trades(
         if tip:
             narrative += f". Trade-level: {tip}."
         narrative += f" Event: {row.get('event_type', '')} — {str(row.get('headline', ''))[:200]}"
+        if base.strip():
+            narrative = base.strip() + " " + narrative
         remarks.append(narrative)
     return pd.Series(remarks, index=flagged.index)
 
@@ -260,6 +353,8 @@ def build_p2_signals(
     trades: pd.DataFrame,
     filings: pd.DataFrame,
     time_to_run_s: float,
+    *,
+    ma_only: bool = False,
 ) -> pd.DataFrame:
     empty_cols = [
         "sec_id",
@@ -283,23 +378,52 @@ def build_p2_signals(
     f = f.dropna(subset=["sec_id", "file_date"])
     if f.empty:
         return pd.DataFrame(columns=empty_cols)
+    if ma_only and "event_type" in f.columns:
+        f = f[f["event_type"].astype(str) == "merger"].copy()
+        if f.empty:
+            return pd.DataFrame(columns=empty_cols)
     o_feat = _prep_ohlcv_features(o)
     merged = compute_pre_drift_flags(o_feat, f)
     if merged.empty:
         return pd.DataFrame(columns=empty_cols)
     merged["remarks"] = enrich_remarks_with_trades(merged, t)
+
+    # source_url: coalesce filing_url + source_url; never blank (SEC search fallback)
+    _fu = (
+        merged["filing_url"].fillna("").astype(str).str.strip()
+        if "filing_url" in merged.columns
+        else pd.Series("", index=merged.index)
+    )
+    if "source_url" in merged.columns:
+        _su = merged["source_url"].fillna("").astype(str).str.strip()
+        _fu = _fu.where(_fu.ne(""), _su)
+    _fallback = SEC_SEARCH_FALLBACK_URL
+    source_urls = _fu.where(_fu.ne(""), _fallback).fillna(_fallback).astype(str)
+    source_urls = source_urls.replace({"nan": _fallback, "None": _fallback, "": _fallback})
+
     sw = pd.to_datetime(merged["suspicious_window_start"], errors="coerce")
+    ev = merged["file_date"]
+    sw = sw.fillna(ev - pd.Timedelta(days=7))
+    sw_str = sw.dt.strftime("%Y-%m-%d")
+    fb_sw = (ev - pd.Timedelta(days=7)).dt.strftime("%Y-%m-%d")
+    suspicious_out = sw_str.where(sw.notna(), fb_sw).fillna("n/a")
+
+    pflag = pd.to_numeric(merged["pre_drift_flag"], errors="coerce").fillna(0).astype(int)
+
     out = pd.DataFrame(
         {
             "sec_id": pd.to_numeric(merged["sec_id"], errors="coerce").astype("Int64"),
             "event_date": merged["file_date"].dt.strftime("%Y-%m-%d"),
             "event_type": merged["event_type"].fillna("other"),
             "headline": merged["headline"].fillna("").map(lambda x: re.sub(r"[\r\n]+", " ", str(x))[:300]),
-            "source_url": merged["filing_url"].fillna(""),
-            "pre_drift_flag": merged["pre_drift_flag"].astype(int),
-            "suspicious_window_start": [x.strftime("%Y-%m-%d") if pd.notna(x) else "" for x in sw],
+            "source_url": source_urls,
+            "pre_drift_flag": pflag,
+            "suspicious_window_start": suspicious_out,
             "remarks": merged["remarks"],
             "time_to_run": round(time_to_run_s, 3),
         }
     )
-    return out
+    # M&A-related rows first (organizer: clearest pre-announcement drift)
+    pri = out["event_type"].astype(str).map(lambda e: 0 if e == "merger" else 1)
+    out = out.assign(_pri=pri).sort_values(["_pri", "event_date", "sec_id"]).drop(columns="_pri")
+    return coerce_p2_signal_columns(out)

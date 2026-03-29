@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from p2.edgar import fetch_8k_filings, merge_sec_ids
+from p2.edgar import build_edgar_search_overrides, fetch_8k_filings, merge_sec_ids
 from p2.insider_signals import build_p2_signals
 
 
@@ -20,17 +20,26 @@ def load_ticker_map(root: Path, ohlcv: pd.DataFrame) -> pd.DataFrame:
     """
     map_path = root / "sec_id_map.csv"
     if map_path.is_file():
-        return pd.read_csv(map_path)
-    if "ticker" not in ohlcv.columns or "sec_id" not in ohlcv.columns:
+        m = pd.read_csv(map_path)
+    elif "ticker" not in ohlcv.columns or "sec_id" not in ohlcv.columns:
         raise SystemExit(
             f"No {map_path.name} and ohlcv.csv has no ticker column — cannot map EDGAR tickers to sec_id."
         )
-    m = (
-        ohlcv[["sec_id", "ticker"]]
-        .drop_duplicates(subset=["sec_id"])
-        .assign(ticker=lambda d: d["ticker"].astype(str).str.upper().str.strip())
-    )
-    print(f"Using sec_id↔ticker from ohlcv.csv ({len(m)} rows); no separate sec_id_map.csv.")
+    else:
+        m = (
+            ohlcv[["sec_id", "ticker"]]
+            .drop_duplicates(subset=["sec_id"])
+            .assign(ticker=lambda d: d["ticker"].astype(str).str.upper().str.strip())
+        )
+        print(f"Using sec_id↔ticker from ohlcv.csv ({len(m)} rows); no separate sec_id_map.csv.")
+    if "edgar_query" not in m.columns:
+        m = m.assign(edgar_query="")
+    else:
+        m = m.assign(edgar_query=lambda d: d["edgar_query"].fillna("").astype(str).str.strip())
+    m = m.assign(ticker=lambda d: d["ticker"].astype(str).str.upper().str.strip())
+    nq = (m["edgar_query"] != "").sum()
+    if nq:
+        print(f"EDGAR: using non-empty edgar_query overrides for {nq} ticker(s) (legal-name search).")
     return m
 
 
@@ -82,13 +91,24 @@ def main() -> None:
         "--edgar-sleep",
         type=float,
         default=0.3,
-        help="Pause between ticker requests seconds (organizer starter: 0.3).",
+        help="Pause between EDGAR bursts (s); with --edgar-concurrency 1, pause after each ticker (starter: 0.3).",
+    )
+    parser.add_argument(
+        "--edgar-concurrency",
+        type=int,
+        default=3,
+        help="Parallel tickers per burst (default 3 for <~60s runs); use 1 for strict sequential + sleep after each.",
     )
     parser.add_argument(
         "--edgar-retries",
         type=int,
         default=3,
         help="Retries on HTTP 5xx / network errors per ticker (not in starter; helps flaky SEC).",
+    )
+    parser.add_argument(
+        "--ma-only",
+        action="store_true",
+        help="Keep only M&A-classified 8-Ks (headline keywords: merger, acquisition, …).",
     )
     args = parser.parse_args()
 
@@ -105,6 +125,7 @@ def main() -> None:
     ticker_map = load_ticker_map(root, ohlcv)
 
     tickers = ticker_map["ticker"].astype(str).str.upper().unique().tolist()
+    edgar_over = build_edgar_search_overrides(ticker_map)
 
     if args.skip_edgar:
         if args.filings_cache is None or not args.filings_cache.is_file():
@@ -120,6 +141,8 @@ def main() -> None:
             sleep_s=args.edgar_sleep,
             timeout=args.edgar_timeout,
             max_retries=args.edgar_retries,
+            search_overrides=edgar_over or None,
+            batch_concurrency=max(1, args.edgar_concurrency),
         )
         if filings.empty:
             print("EDGAR returned no rows — check tickers, dates, or network.")
@@ -135,7 +158,7 @@ def main() -> None:
         print("No filings joined to sec_id — check ticker_map tickers vs EDGAR entity tickers.")
 
     elapsed = time.perf_counter() - t0
-    out = build_p2_signals(ohlcv, trades, filings, time_to_run_s=elapsed)
+    out = build_p2_signals(ohlcv, trades, filings, time_to_run_s=elapsed, ma_only=args.ma_only)
     # refresh time_to_run with full pipeline wall time
     out["time_to_run"] = round(time.perf_counter() - t0, 3)
 

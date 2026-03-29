@@ -41,6 +41,10 @@ make run-all EQUITY_ROOT="$HOME/Downloads/student-pack/equity"
 
 **P2 offline:** cache filings once, then `python3 run_p2.py --data-root "$EQUITY_ROOT" --skip-edgar --filings-cache path/to/filings.csv -o p2_signals.csv`.
 
+**P2 EDGAR-only (scraper first):** `python3 scripts/fetch_p2_filings_only.py --data-root path/to/equity -o p2_filings_cache.csv` then `run_p2.py --skip-edgar --filings-cache p2_filings_cache.csv …`.
+
+**P2 organizer tips (implemented):** **`--edgar-concurrency 3`** (default) runs tickers in small parallel bursts with **`--edgar-sleep 0.3`** between bursts (use **`1`** for strict sequential starter behavior). Dates are forced to `YYYY-MM-DD` strings; optional **`edgar_query`** on the ticker map; **`--ma-only`**; merger rows sorted first; **`trade_data` `trader_id`** hints in **remarks**. Starter doc: `data/student-pack/docs/edgar_starter_snippet.md`.
+
 ---
 
 ## Problem 3 — Approach (what we built)
@@ -250,11 +254,11 @@ make p1 P1_ROOT=/path/to/equity && make p2 P2_ROOT=/path/to/equity   # optional
 
 **P1 tab:** static **`p1_alerts.csv`**, **run from folder** (`market_data.csv`, optional `trade_data.csv`), or **Live (poll CSV URLs)** (HTTPS raw CSVs). Secrets **`P1_ALERTS_URL`**, optional **`P1_LIVE_MARKET_URL`** / **`P1_LIVE_TRADE_URL`**. Default equity folder follows **`EQUITY_ROOT`** (or **`EQUITY_DATA_STREAMLIT_DEFAULT`**) if set.
 
-**P2 tab:** static **`p2_signals.csv`** or **run pipeline** (`ohlcv.csv` + `trade_data.csv`). With live EDGAR, choose an **EDGAR re-fetch interval** (time-bucketed cache); with **skip EDGAR**, cache tracks local file mtimes. Secret **`P2_SIGNALS_URL`**. Same **`EQUITY_ROOT`** default as P1.
+**P2 tab:** static **`p2_signals.csv`** or **run pipeline** (`ohlcv.csv` + `trade_data.csv`). **EDGAR burst size** defaults to **3** parallel tickers (~under **60s** for ~28 names + signal build on a typical connection); set to **1** if you want sequential requests only. With live EDGAR, set a **re-fetch interval** (time-bucketed cache); with **skip EDGAR**, cache tracks local file mtimes. Secret **`P2_SIGNALS_URL`**. Same **`EQUITY_ROOT`** default as P1.
 
 ### Streamlit Community Cloud (optional)
 
-**Main file path:** **`dashboard/app.py`**. Use Secrets for **`PRIMARY_SUBMISSION_URL`**, **`P1_ALERTS_URL`**, **`P2_SIGNALS_URL`**, **`P1_LIVE_*`**, **`LIVE_SPOT_VENUE`**, etc. (see **`.streamlit/secrets.toml.example`**). P2 **Run pipeline** hits the SEC network from the host (respect rate limits).
+**Main file path:** **`dashboard/app.py`**. **Requirements:** root **`requirements.txt`**. Use Secrets for **`PRIMARY_SUBMISSION_URL`**, **`P1_ALERTS_URL`**, **`P2_SIGNALS_URL`**, **`P1_LIVE_*`**, **`LIVE_SPOT_VENUE`**, etc. (see **`.streamlit/secrets.toml.example`**). P2 **Run pipeline** calls the SEC from the cloud host (burst concurrency + sleep still apply). For demos without equity files in the repo, use **P2 → Static CSV** + **`P2_SIGNALS_URL`** or upload **`p2_signals.csv`**.
 
 ## Tuning before submit
 
