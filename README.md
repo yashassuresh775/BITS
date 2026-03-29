@@ -11,6 +11,21 @@ python run_p1.py --data-root path/to/equity-data -o p1_alerts.csv
 python run_p2.py --data-root path/to/equity-data -o p2_signals.csv --start-date 2026-01-01 --end-date 2026-03-31
 ```
 
+**Problem 1 — speed / baseline:** Spread and cross-level HHI z-scores use a long rolling window (**default 6500** minutes ≈ **17** regular sessions at ~390 min/day). For a **~30-session** baseline when you have enough history, set **`P1_SPREAD_ROLL_LONG=11700`** before running P1 or the dashboard folder mode. The **`time_to_run`** column in **`p1_alerts.csv`** is seconds for **`build_alerts`** on that run (typically **sub-second** on the student equity pack with defaults). Installing **`threadpoolctl`** (optional) lets P1 cap BLAS/OpenMP threads during DBSCAN-heavy work.
+
+**Regenerating CSVs in this repo** (after changing code or data; use **`.venv/bin/python`** if you use a venv):
+
+```bash
+cd /path/to/BITS && source .venv/bin/activate
+python3 run_p1.py --data-root data/equity-data -o p1_alerts.csv
+python3 run_p2.py --data-root data/equity-data -o p2_signals.csv --start-date 2026-01-01 --end-date 2026-03-31
+python3 run_p3.py --data-root data/student-pack -o submission.csv
+```
+
+Optional copies for demos: **`submission_offline.csv`** (same pack, no dashboard sample sync: add **`--no-dashboard-sample`**), **`submission_from_binance.csv`** with **`--data-root data/binance-hist`**, **`submission_live.csv`** with **`run_p3.py --live --live-once -o submission_live.csv`**. Row counts for **P2** can shift slightly when EDGAR returns change.
+
+**Streamlit:** Run **`python3 -m streamlit run dashboard/app.py`** with the same environment as **`requirements.txt`** so **`p2.insider_signals`** loads the pandas pipeline reliably.
+
 Problem 2 calls the SEC EDGAR API (`requests` in **`requirements.txt`**). Use `make p1 P1_ROOT=...` / `make p2 P2_ROOT=...` if your Makefile defines those targets.
 
 **Run P3 + benchmark + P1 + P2 in one go (correct shell — no `--` after `make`):**

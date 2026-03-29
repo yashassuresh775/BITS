@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import time
+from contextlib import nullcontext
 from typing import Any
 
 import numpy as np
+
+try:
+    from threadpoolctl import threadpool_limits
+except ImportError:
+    threadpool_limits = None  # type: ignore[misc, assignment]
 import pandas as pd
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import StandardScaler
@@ -153,8 +159,12 @@ def _cluster_one_ticker(sec: float, g: pd.DataFrame, trades_note: str) -> list[d
     else:
         X = _feature_matrix(cand)
         scaler = StandardScaler()
-        Xs = scaler.fit_transform(X)
-        cl = DBSCAN(eps=DBSCAN_EPS, min_samples=ms).fit_predict(Xs).astype(np.int32, copy=False)
+        Xs = scaler.fit_transform(X).astype(np.float32, copy=False)
+        # n_jobs=1 avoids per-ticker joblib pool startup (dominant vs fit time at this scale).
+        # ball_tree is slightly faster than auto on typical candidate counts in this pack.
+        cl = DBSCAN(
+            eps=DBSCAN_EPS, min_samples=ms, n_jobs=1, algorithm="ball_tree"
+        ).fit_predict(Xs).astype(np.int32, copy=False)
 
     # Numpy path: avoid thousands of small DataFrame slices in inner loops.
     minute_ns = cand["minute"].values.astype("datetime64[ns]").astype(np.int64)
@@ -172,7 +182,7 @@ def _cluster_one_ticker(sec: float, g: pd.DataFrame, trades_note: str) -> list[d
     minute_dt = cand["minute"].values
 
     sid_out = int(sec) if pd.notna(sec) else sec
-    for lab in np.unique(np.sort(cl)):
+    for lab in np.unique(cl):
         row_idx = np.flatnonzero(cl == lab)
         order = row_idx[np.argsort(minute_ns[row_idx], kind="mergesort")]
         for grp in _contiguous_row_groups(order, minute_ns):
@@ -224,16 +234,23 @@ def build_alerts(
     trades_per_min: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, float]:
     t0 = time.perf_counter()
-    fe = enrich_all(compute_row_features(market_df))
-    fe = attach_trade_aggression(fe, trades_per_min)
+    # One BLAS thread per process avoids oversubscription across many small DBSCAN fits.
+    tp_ctx = (
+        threadpool_limits(limits=1)
+        if threadpool_limits is not None
+        else nullcontext()
+    )
+    with tp_ctx:
+        fe = enrich_all(compute_row_features(market_df))
+        fe = attach_trade_aggression(fe, trades_per_min)
 
-    all_rows: list[dict[str, Any]] = []
-    trades_note = ""
-    if trades_per_min is not None and not trades_per_min.empty:
-        trades_note = " Client trades (optional) used only for buy-vs-depth ratio in remarks."
+        all_rows: list[dict[str, Any]] = []
+        trades_note = ""
+        if trades_per_min is not None and not trades_per_min.empty:
+            trades_note = " Client trades (optional) used only for buy-vs-depth ratio in remarks."
 
-    for sec, g in fe.groupby("sec_id", sort=False):
-        all_rows.extend(_cluster_one_ticker(sec, g, trades_note))
+        for sec, g in fe.groupby("sec_id", sort=False):
+            all_rows.extend(_cluster_one_ticker(sec, g, trades_note))
 
     elapsed = time.perf_counter() - t0
     if not all_rows:

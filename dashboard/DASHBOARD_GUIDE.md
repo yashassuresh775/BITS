@@ -37,6 +37,8 @@ You only use **one tab at a time** for a coherent story: “equity microstructur
 
 **Local folder:** Default is `data/equity-data/` unless you set `EQUITY_ROOT` (or related env vars). Large CSVs are usually **not** in git; you copy the student-pack **equity** folder locally.
 
+**Tuning (matches `p1/config.py`):** Optional env **`P1_SPREAD_ROLL_LONG`** — default **6500** (faster rolling baseline); use **11700** for a longer ~30-session spread/HHI history when rows allow. The **`time_to_run`** column in static **`p1_alerts.csv`** reflects the last pipeline run’s **`build_alerts`** wall time.
+
 ### 2.3 Labeled UI components (P1 tab, top to bottom)
 
 | Component | Purpose |
@@ -93,6 +95,8 @@ You only use **one tab at a time** for a coherent story: “equity microstructur
 | **SEC EDGAR** (live) | Fetches 8-K-related filings for those tickers between **start** and **end** dates. |
 | **Filings cache CSV** | Used when **Skip EDGAR** is on — same columns as a saved EDGAR pull (`file_date`, `headline`, URL, etc.). |
 | **`p2_signals.csv`** | Precomputed table for **Static CSV** mode. |
+
+**Imports:** The dashboard expects the **same Python environment** as **`pip install -r requirements.txt`** (project venv). Problem 2 helpers in **`p2/insider_signals.py`** re-export the pandas pipeline so **`from p2.insider_signals import …`** works under Streamlit.
 
 ### 3.3 Labeled UI components (P2 tab)
 

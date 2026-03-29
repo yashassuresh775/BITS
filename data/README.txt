@@ -10,3 +10,6 @@ Then run from repo root:
   python scripts/benchmark_p3.py --runs 2
 
 CSV files under data/student-pack/ are gitignored (see .gitignore).
+
+Root-level outputs (p1_alerts.csv, p2_signals.csv, submission*.csv) are regenerated
+from the repo root; see the "Regenerating CSVs" section in README.md.

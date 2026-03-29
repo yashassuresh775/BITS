@@ -23,6 +23,7 @@ P2_MIN_COLS = ("sec_id", "event_date", "remarks")
 # Put key columns before long ``headline`` / ``remarks`` so they stay visible without horizontal scroll.
 P2_TABLE_COLUMN_ORDER = (
     "sec_id",
+    "ticker",
     "event_date",
     "event_type",
     "source_url",
@@ -224,6 +225,9 @@ def render_p2_tab() -> None:
 
         if mode == "Static CSV":
             path = st.text_input("Path to p2_signals.csv", value=str(P2_DEFAULT_CSV), key="p2_csv_path")
+            if st.button("Reload CSV from disk", key="p2_csv_reload", help="Clears Streamlit cache so edits to the file show immediately."):
+                load_p2_csv.clear()
+                st.rerun()
             if secret_url:
                 src_choice = st.radio(
                     "Load from",
