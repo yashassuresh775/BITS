@@ -228,6 +228,8 @@ Exit code **1** if any smoke check fails.
 
 One Streamlit app with **three tabs**: **P1** (order-book alerts), **P2** (EDGAR + signals), **P3** (crypto submission). Each tab supports **path / upload / optional Secrets URL**, filters, charts, and optional **auto-refresh** (same overall pattern as the former P3-only UI).
 
+**Tour of the UI (every control + datasets + how to read results):** see **`dashboard/DASHBOARD_GUIDE.md`**.
+
 From the repo root:
 
 ```bash

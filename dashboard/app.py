@@ -586,6 +586,14 @@ def main() -> None:
     )
     st.title("BITS — Trade surveillance")
     st.caption("**P1** order-book alerts · **P2** EDGAR / insider signals · **P3** crypto submission — open a tab below.")
+    with st.expander("How to read this dashboard (labels, datasets, results)", expanded=False):
+        st.markdown(
+            "Each tab is a different problem. Controls at the **top** of a tab choose *data source* "
+            "(static file, local folder pipeline, live API/URLs). **Metrics and charts** summarize the loaded table; "
+            "the **table at the bottom** is the real output—read **`remarks`** for the explanation of each row.\n\n"
+            "**Full guide (every widget named, file formats, how to evaluate):** open "
+            "`dashboard/DASHBOARD_GUIDE.md` in the repo (same folder as this app)."
+        )
 
     t1, t2, t3 = st.tabs(["P1 — Order book", "P2 — EDGAR", "P3 — Crypto"])
     with t1:
