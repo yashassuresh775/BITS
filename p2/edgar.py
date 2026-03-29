@@ -1,4 +1,13 @@
-"""Fetch 8-K filings from SEC EDGAR full-text search (public API)."""
+"""Fetch 8-K filings from SEC EDGAR full-text search (organizer starter + extras).
+
+Follows ``data/student-pack/docs/edgar_starter_snippet.md`` (same URL, params, ``sleep(0.3)``,
+``timeout=10`` defaults). This module adds:
+
+- Descriptive ``User-Agent`` / ``Accept`` (SEC guidance)
+- Optional ``headline`` text for ``classify_event``
+- ``merge_sec_ids`` for ``sec_id`` join
+- Short retries on HTTP 5xx (transient SEC errors)
+"""
 
 from __future__ import annotations
 
@@ -8,6 +17,11 @@ import pandas as pd
 import requests
 
 EDGAR_URL = "https://efts.sec.gov/LATEST/search-index"
+
+# Starter defaults (see edgar_starter_snippet.md)
+DEFAULT_SLEEP_S = 0.3
+DEFAULT_TIMEOUT_S = 10.0
+DEFAULT_MAX_RETRIES = 3
 
 # SEC asks for a descriptive User-Agent; replace contact if you ship this.
 DEFAULT_HEADERS = {
@@ -55,15 +69,44 @@ def classify_event(headline: str) -> str:
     return "other"
 
 
+def _get_json_with_retries(
+    sess: requests.Session,
+    params: dict[str, str],
+    *,
+    timeout: float,
+    max_retries: int,
+) -> dict:
+    last_err: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            r = sess.get(EDGAR_URL, params=params, headers=DEFAULT_HEADERS, timeout=timeout)
+            if r.status_code >= 500 and attempt < max_retries - 1:
+                sleep(1.0 + attempt * 0.5)
+                continue
+            r.raise_for_status()
+            return r.json()
+        except requests.RequestException as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                sleep(1.0 + attempt * 0.5)
+    assert last_err is not None
+    raise last_err
+
+
 def fetch_8k_filings(
     tickers: list[str],
     start_date: str,
     end_date: str,
-    sleep_s: float = 0.31,
+    sleep_s: float = DEFAULT_SLEEP_S,
+    timeout: float = DEFAULT_TIMEOUT_S,
+    max_retries: int = DEFAULT_MAX_RETRIES,
     session: requests.Session | None = None,
 ) -> pd.DataFrame:
     """
     Fetch 8-K filings for tickers (quoted search per ticker).
+
+    Same request shape as the organizer starter: ``q`` = ``"TICKER"``, ``forms=8-K``,
+    ``dateRange=custom``, ``startdt`` / ``enddt`` as ``YYYY-MM-DD`` strings.
 
     Returns columns: entity_name, ticker, file_date, form_type, filing_url, headline
     """
@@ -77,9 +120,7 @@ def fetch_8k_filings(
             "startdt": start_date,
             "enddt": end_date,
         }
-        r = sess.get(EDGAR_URL, params=params, headers=DEFAULT_HEADERS, timeout=30)
-        r.raise_for_status()
-        data = r.json()
+        data = _get_json_with_retries(sess, params, timeout=timeout, max_retries=max_retries)
         hits = data.get("hits", {}).get("hits", [])
         for hit in hits:
             src = hit.get("_source", {})

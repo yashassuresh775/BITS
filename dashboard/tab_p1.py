@@ -83,12 +83,19 @@ def _bytes_key(b: bytes, label: str) -> str:
 
 
 @st.cache_data(show_spinner="Running P1 pipeline…")
-def run_p1_from_folder(data_root: str, _mkt_mtime: float, no_trades: bool) -> tuple[pd.DataFrame, str | None, float]:
+def run_p1_from_folder(
+    data_root: str, _mkt_mtime: float, no_trades: bool
+) -> tuple[pd.DataFrame, str | None, float, float]:
+    """
+    Returns ``(df, err, pipeline_seconds, total_seconds)``.
+    ``pipeline_seconds`` matches ``run_p1.py`` / column ``time_to_run`` (``build_alerts`` only).
+    ``total_seconds`` includes CSV load + pipeline (what the browser refresh actually waits for).
+    """
     try:
         root = Path(data_root).expanduser().resolve()
         mp = root / "market_data.csv"
         if not mp.is_file():
-            return pd.DataFrame(), f"Missing market_data.csv under {root}", 0.0
+            return pd.DataFrame(), f"Missing market_data.csv under {root}", 0.0, 0.0
         from p1.io import load_market_data, load_trades_per_minute
         from p1.pipeline import build_alerts
 
@@ -99,13 +106,14 @@ def run_p1_from_folder(data_root: str, _mkt_mtime: float, no_trades: bool) -> tu
             tp = root / "trade_data.csv"
             if tp.is_file():
                 tpm = load_trades_per_minute(str(tp))
-        out, _elapsed = build_alerts(md, tpm)
+        t1 = time.perf_counter()
+        out, pipe_elapsed = build_alerts(md, tpm)
+        total_elapsed = time.perf_counter() - t0
         if not out.empty:
-            out["time_to_run"] = round(time.perf_counter() - t0, 3)
-        elapsed = time.perf_counter() - t0
-        return _validate_p1(out), None, elapsed
+            out["time_to_run"] = round(pipe_elapsed, 3)
+        return _validate_p1(out), None, pipe_elapsed, total_elapsed
     except Exception as e:  # noqa: BLE001
-        return pd.DataFrame(), str(e), 0.0
+        return pd.DataFrame(), str(e), 0.0, 0.0
 
 
 @st.cache_data(show_spinner="P1 live · HTTP GET + pipeline…", ttl=3600)
@@ -114,7 +122,7 @@ def run_p1_live_urls(
     trades_url: str,
     no_trades: bool,
     _poll_tick: int,
-) -> tuple[pd.DataFrame, str | None, float]:
+) -> tuple[pd.DataFrame, str | None, float, float]:
     """
     Re-download CSVs when ``_poll_tick`` changes (``int(time.time() // poll_interval)``).
     There is no public “order-book WebSocket” in-repo — this is **HTTP polling** of raw CSV URLs (your feed / CDN / gist).
@@ -124,7 +132,7 @@ def run_p1_live_urls(
 
         mu = (market_url or "").strip()
         if not mu:
-            return pd.DataFrame(), "Set **Market data URL** (or secret `P1_LIVE_MARKET_URL`).", 0.0
+            return pd.DataFrame(), "Set **Market data URL** (or secret `P1_LIVE_MARKET_URL`).", 0.0, 0.0
 
         t0 = time.perf_counter()
         r = requests.get(mu, timeout=120, headers={"User-Agent": "BITS-p1-live/1.0"})
@@ -143,13 +151,13 @@ def run_p1_live_urls(
                 tdf = pd.read_csv(io.BytesIO(rt.content))
                 tpm = load_trades_per_minute(tdf)
 
-        out, _elapsed = build_alerts(mdf, tpm)
+        out, pipe_elapsed = build_alerts(mdf, tpm)
+        total_elapsed = time.perf_counter() - t0
         if not out.empty:
-            out["time_to_run"] = round(time.perf_counter() - t0, 3)
-        elapsed = time.perf_counter() - t0
-        return _validate_p1(out), None, elapsed
+            out["time_to_run"] = round(pipe_elapsed, 3)
+        return _validate_p1(out), None, pipe_elapsed, total_elapsed
     except Exception as e:  # noqa: BLE001
-        return pd.DataFrame(), str(e), 0.0
+        return pd.DataFrame(), str(e), 0.0, 0.0
 
 
 def render_p1_tab() -> None:
@@ -191,7 +199,8 @@ def render_p1_tab() -> None:
         df = pd.DataFrame()
         src = ""
         err: str | None = None
-        elapsed = 0.0
+        elapsed_pipe = 0.0
+        elapsed_total = 0.0
 
         if mode == "Static CSV":
             path = st.text_input("Path to p1_alerts.csv", value=str(P1_DEFAULT_CSV), key="p1_csv_path")
@@ -232,7 +241,7 @@ def render_p1_tab() -> None:
             if st.button("Run / refresh pipeline", key="p1_run_btn", type="primary"):
                 st.session_state["p1_force_run"] = time.time()
             force = st.session_state.get("p1_force_run", 0)
-            df, err, elapsed = run_p1_from_folder(root, mkt_mt + force * 1e-9, no_tr)
+            df, err, elapsed_pipe, elapsed_total = run_p1_from_folder(root, mkt_mt + force * 1e-9, no_tr)
             src = f"folder:{root}|mkt={mkt_mt}|f={force}"
 
         else:
@@ -260,7 +269,7 @@ def render_p1_tab() -> None:
                 run_p1_live_urls.clear()
                 st.success("Cache cleared.")
             tick = int(time.time() // max(int(poll), 15))
-            df, err, elapsed = run_p1_live_urls(murl, turl, no_tr, tick)
+            df, err, elapsed_pipe, elapsed_total = run_p1_live_urls(murl, turl, no_tr, tick)
             src = f"live_urls|tick={tick}|poll={poll}"
 
     try:
@@ -282,8 +291,11 @@ def render_p1_tab() -> None:
         return
 
     st.success(f"**{len(df)}** alerts · source `{src[:80]}…`" if len(src) > 80 else f"**{len(df)}** alerts · `{src}`")
-    if elapsed > 0:
-        st.caption(f"Last pipeline wall time: **{elapsed:.2f}s**")
+    if elapsed_pipe > 0 or elapsed_total > 0:
+        cap = f"**Pipeline compute** (`time_to_run`, same as CLI): **{elapsed_pipe:.2f}s**"
+        if elapsed_total > elapsed_pipe + 0.02:
+            cap += f" · **including CSV / network load:** **{elapsed_total:.2f}s**"
+        st.caption(cap)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Alerts", len(df))

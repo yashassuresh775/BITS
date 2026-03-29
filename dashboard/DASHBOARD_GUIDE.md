@@ -56,7 +56,7 @@ You only use **one tab at a time** for a coherent story: “equity microstructur
 | **Poll interval / Market URL / Trade URL** | **Live URLs** mode: how often to refetch and where. |
 | **Clear P1 live cache** | Drops cached HTTP results for live mode. |
 | **Green success line** | Row count + short **source** tag (path, folder, or live tick). |
-| **Last pipeline wall time** | Seconds for the last **computed** run (folder or live), not static file load. |
+| **Timing caption** | **Pipeline compute** matches the **`time_to_run`** column and **`run_p1.py`** (``build_alerts`` only). If CSV download/load is extra, the caption also shows **including CSV / network load** for the full refresh. |
 | **Metrics: Alerts / sec_id (unique) / HIGH severity** | **Alerts** = rows in the table. **sec_id** = how many different securities appear. **HIGH** = count of high-severity rows (quick risk summary). |
 | **Multiselect: Severity / Anomaly type** | Filters the table and charts. |
 | **Bar chart: By severity** | How many alerts per severity bucket (e.g. HIGH / MEDIUM). |

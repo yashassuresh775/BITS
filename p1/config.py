@@ -13,14 +13,16 @@ MIN_SUSTAINED_MINUTES = 3
 # Z-score on spread vs rolling baseline (per ticker, in-sample history)
 SPREAD_Z_ALERT = 2.8
 
-# Rolling windows (rows = minutes in typical pack)
-OBI_ROLL_SHORT = 10  # 10-minute rolling mean/std of OBI
+# Rolling windows (rows = minutes; US regular session ≈ 390 min/day)
+OBI_ROLL_SHORT = 10  # 10-minute rolling mean/std of OBI (spec suggested feature)
 SPREAD_BASELINE_MIN = 120  # at least 2h of history before z-score is trusted
-# Longer spread baseline: ~1 week of trading minutes if available
-SPREAD_ROLL_LONG = 2000
+# Spread vs ~30 trading sessions when enough rows (390×30); shorter series uses all history
+SPREAD_ROLL_LONG = 11700
+# Cross-level depth shape: HHI z vs same long window (distribution across L1–L10 vs ticker norm)
+HHI_Z_ALERT = 3.0
 
-# DBSCAN (feature-space clustering of candidate minutes)
-DBSCAN_EPS = 0.55
+# DBSCAN (feature-space clustering; extra dims = OBI shock, HHI z — slightly wider eps)
+DBSCAN_EPS = 0.72
 DBSCAN_MIN_SAMPLES = 4
 
 # Cap rows (FPs are expensive); raise on quiet data if needed

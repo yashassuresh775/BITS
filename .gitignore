@@ -32,6 +32,8 @@ credentials.json
 # Hackathon data (large + distribution-sensitive)
 data/student-pack/*
 !data/student-pack/.gitkeep
+!data/student-pack/docs/
+!data/student-pack/docs/edgar_starter_snippet.md
 
 # Equity pack CSVs (copy from student-pack locally; keep README only)
 data/equity-data/*

@@ -72,6 +72,24 @@ def main() -> None:
         default=None,
         help="CSV from a prior EDGAR run (columns: ticker, file_date, headline, filing_url, ...)",
     )
+    parser.add_argument(
+        "--edgar-timeout",
+        type=float,
+        default=10.0,
+        help="Per-request timeout seconds (organizer starter uses 10).",
+    )
+    parser.add_argument(
+        "--edgar-sleep",
+        type=float,
+        default=0.3,
+        help="Pause between ticker requests seconds (organizer starter: 0.3).",
+    )
+    parser.add_argument(
+        "--edgar-retries",
+        type=int,
+        default=3,
+        help="Retries on HTTP 5xx / network errors per ticker (not in starter; helps flaky SEC).",
+    )
     args = parser.parse_args()
 
     root = args.data_root.resolve()
@@ -99,6 +117,9 @@ def main() -> None:
             tickers=tickers,
             start_date=args.start_date,
             end_date=args.end_date,
+            sleep_s=args.edgar_sleep,
+            timeout=args.edgar_timeout,
+            max_retries=args.edgar_retries,
         )
         if filings.empty:
             print("EDGAR returned no rows — check tickers, dates, or network.")
