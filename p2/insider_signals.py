@@ -88,19 +88,17 @@ def normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
 
 def _prep_ohlcv_features(ohlcv: pd.DataFrame) -> pd.DataFrame:
     """Per sec_id: daily return, 15d rolling mean/std volume and return (shifted, no leak)."""
-    g = ohlcv.groupby("sec_id", group_keys=False)
-
-    def add_features(x: pd.DataFrame) -> pd.DataFrame:
-        x = x.sort_values("trade_date")
+    pieces: list[pd.DataFrame] = []
+    for _, x in ohlcv.groupby("sec_id", sort=False):
+        x = x.sort_values("trade_date").copy()
         x["daily_ret"] = x["close"].pct_change()
         x["vol_15d_mean"] = x["volume"].shift(1).rolling(15, min_periods=5).mean()
         x["vol_15d_std"] = x["volume"].shift(1).rolling(15, min_periods=5).std()
         x["ret_15d_mean"] = x["daily_ret"].shift(1).rolling(15, min_periods=5).mean()
         x["ret_15d_std"] = x["daily_ret"].shift(1).rolling(15, min_periods=5).std()
         x["volume_z"] = (x["volume"] - x["vol_15d_mean"]) / x["vol_15d_std"].replace(0, np.nan)
-        return x
-
-    return g.apply(add_features, include_groups=False)
+        pieces.append(x)
+    return pd.concat(pieces, ignore_index=True) if pieces else pd.DataFrame()
 
 
 def _last_n_trading_dates_before(
