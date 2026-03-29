@@ -28,7 +28,10 @@ from p3.detectors.wallet_patterns import (
     detect_aml_structuring,
     detect_chain_pass_through,
     detect_coordinated_pump_minute,
+    detect_coordinated_structuring,
     detect_layering_echo,
+    detect_manager_consolidation,
+    detect_placement_smurfing,
     detect_ramping,
     detect_round_trip_pair,
     detect_threshold_testing,
@@ -69,6 +72,9 @@ def _prepare_symbol(
     parts.append(detect_threshold_testing(trades, symbol))
     parts.append(detect_coordinated_pump_minute(trades, symbol))
     parts.append(detect_chain_pass_through(trades, symbol))
+    parts.append(detect_placement_smurfing(trades, symbol))
+    parts.append(detect_coordinated_structuring(trades, symbol))
+    parts.append(detect_manager_consolidation(trades, symbol))
 
     parts.append(detect_pump_dump_trades(trades, market, symbol))
     parts.append(detect_spoofing_proxy(trades, market, symbol))

@@ -30,6 +30,20 @@ STRUCT_MIN_TRADES = 8
 STRUCT_CV_MAX = 0.12  # coefficient of variation of notional
 STRUCT_MAX_MIN_RATIO = 1.12  # max(notional)/min(notional) for same wallet-day
 
+# Taxonomy bonus: placement_smurfing (first-appearance cluster hour)
+PLACEMENT_MIN_WALLETS = 7
+PLACEMENT_CV_MAX = 0.14
+PLACEMENT_MAX_MIN_RATIO = 1.12
+
+# Taxonomy bonus: coordinated_structuring (multi-wallet same-hour smurfing band)
+COORD_STRUCT_MIN_WALLETS = 4
+COORD_STRUCT_MIN_TRADES_PER_W = 5
+
+# Taxonomy bonus: manager_consolidation (one dominant leg vs rest of day for wallet)
+MANAGER_CONSOL_RATIO = 10.0
+MANAGER_MIN_DISTINCT_WALLETS_DAY = 8
+MANAGER_MIN_LARGE_NOTIONAL = 12_000.0
+
 # Ramping: consecutive same-side trades with monotone prices
 RAMP_MIN_STREAK = 6
 

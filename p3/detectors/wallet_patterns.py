@@ -4,6 +4,14 @@ import numpy as np
 import pandas as pd
 
 from p3.config import (
+    COORD_STRUCT_MIN_TRADES_PER_W,
+    COORD_STRUCT_MIN_WALLETS,
+    MANAGER_CONSOL_RATIO,
+    MANAGER_MIN_DISTINCT_WALLETS_DAY,
+    MANAGER_MIN_LARGE_NOTIONAL,
+    PLACEMENT_CV_MAX,
+    PLACEMENT_MAX_MIN_RATIO,
+    PLACEMENT_MIN_WALLETS,
     RAMP_MIN_STREAK,
     ROUND_TRIP_MAX_SEC,
     ROUND_TRIP_MIN_QTY_RATIO,
@@ -322,4 +330,120 @@ def detect_chain_pass_through(trades: pd.DataFrame, symbol: str) -> pd.DataFrame
         f"{symbol}: sequential SELL/BUY/SELL/BUY across wallets with matched sizes — "
         "pass-through / layering chain."
     )
+    return hit
+
+
+def detect_placement_smurfing(trades: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """
+    Many wallets' *first ever* trade on this tape clusters in one hour with similar notionals
+    (official: placement_smurfing).
+    """
+    t = trades.sort_values("timestamp")
+    first_idx = t.groupby("wallet_id", sort=False)["timestamp"].idxmin()
+    first = t.loc[first_idx].copy()
+    first["_h"] = first["timestamp"].dt.floor("h")
+    chunks: list[pd.DataFrame] = []
+    for _, g in first.groupby("_h"):
+        if len(g) < PLACEMENT_MIN_WALLETS:
+            continue
+        n = g["notional"].astype(float)
+        if n.min() <= 0 or n.mean() <= 0:
+            continue
+        cv = float(n.std() / n.mean())
+        if cv > PLACEMENT_CV_MAX:
+            continue
+        if n.max() / n.min() > PLACEMENT_MAX_MIN_RATIO:
+            continue
+        chunks.append(g.drop(columns=["_h"]))
+    if not chunks:
+        return pd.DataFrame()
+    hit = pd.concat(chunks, ignore_index=True)
+    hit["violation_type"] = "placement_smurfing"
+    hit["detector"] = "placement_smurfing"
+    hit["score"] = 4
+    hit["remarks"] = (
+        f"{symbol}: {PLACEMENT_MIN_WALLETS}+ wallets' first trades cluster same UTC hour "
+        "with tight notional band — coordinated placement / smurfing footprint."
+    )
+    return hit
+
+
+def detect_coordinated_structuring(trades: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """
+    Multiple distinct wallets in the same hour each run many same-sized trades
+    (official: coordinated_structuring).
+    """
+    t = trades.copy()
+    t["_d"] = _trade_date_series(t["timestamp"])
+    t["_h"] = t["timestamp"].dt.floor("h")
+    hit_idx: set[int] = set()
+    for (_, _), block in t.groupby(["_d", "_h"]):
+        struct_wallets: list[object] = []
+        for w, gw in block.groupby("wallet_id"):
+            if len(gw) < COORD_STRUCT_MIN_TRADES_PER_W:
+                continue
+            n = gw["notional"].astype(float)
+            if n.min() <= 0:
+                continue
+            cv = float(n.std() / n.mean()) if n.mean() else 1.0
+            ratio = float(n.max() / n.min())
+            if cv <= STRUCT_CV_MAX and ratio <= STRUCT_MAX_MIN_RATIO * 1.06:
+                struct_wallets.append(w)
+        if len(struct_wallets) < COORD_STRUCT_MIN_WALLETS:
+            continue
+        for w in struct_wallets:
+            hit_idx.update(block.index[block["wallet_id"] == w].tolist())
+    if not hit_idx:
+        return pd.DataFrame()
+    hit = trades.loc[sorted(hit_idx)].copy()
+    hit["violation_type"] = "coordinated_structuring"
+    hit["detector"] = "coordinated_structuring"
+    hit["score"] = 4
+    hit["remarks"] = (
+        f"{symbol}: {COORD_STRUCT_MIN_WALLETS}+ wallets same hour each with "
+        f"{COORD_STRUCT_MIN_TRADES_PER_W}+ similar-notional prints — coordinated structuring."
+    )
+    return hit
+
+
+def detect_manager_consolidation(trades: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """
+    One wallet shows a dominant large leg same day vs its other activity while many
+    wallets trade the tape (official: manager_consolidation hint).
+    """
+    t = trades.copy()
+    t["_d"] = _trade_date_series(t["timestamp"])
+    rows: list[pd.DataFrame] = []
+    for _, g in t.groupby("_d"):
+        if g["wallet_id"].nunique() < MANAGER_MIN_DISTINCT_WALLETS_DAY:
+            continue
+        p85 = float(g["notional"].quantile(0.85))
+        for w, gw in g.groupby("wallet_id"):
+            if len(gw) < 2:
+                continue
+            n = gw["notional"].astype(float)
+            mx = float(n.max())
+            rest = n[n < mx]
+            if rest.empty:
+                continue
+            med_rest = float(rest.median())
+            if med_rest <= 0:
+                continue
+            if mx < max(MANAGER_MIN_LARGE_NOTIONAL, p85 * 0.9):
+                continue
+            if mx / med_rest < MANAGER_CONSOL_RATIO:
+                continue
+            peak = gw.loc[gw["notional"] >= mx - 1e-9].iloc[:1]
+            rows.append(peak)
+    if not rows:
+        return pd.DataFrame()
+    hit = pd.concat(rows, ignore_index=True)
+    hit = hit.drop(columns=["_d"], errors="ignore")
+    hit["violation_type"] = "manager_consolidation"
+    hit["detector"] = "manager_consolidation"
+    hit["score"] = 4
+    hit["remarks"] = (
+        f"{symbol}: wallet shows dominant large notional leg same day vs its other prints "
+        f"(ratio >={MANAGER_CONSOL_RATIO:.0f}x) on active tape — consolidation / collector pattern."
+     )
     return hit

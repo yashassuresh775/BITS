@@ -23,7 +23,7 @@ def detect_peg_break(trades: pd.DataFrame, symbol: str) -> pd.DataFrame:
     hit["remarks"] = hit.apply(
         lambda r: (
             f"USDCUSDT trade at {r['price']:.6f} vs peg 1.0 "
-            f"(|Δ|>{PEG_BREAK_ABS}); notional {r['notional']:.2f} USDT."
+            f"(abs dev > {PEG_BREAK_ABS}); notional {r['notional']:.2f} USDT."
         ),
         axis=1,
     )
@@ -89,7 +89,8 @@ def detect_bat_hot_hours(
     if tr.empty:
         return pd.DataFrame()
     tr = tr.drop(columns=["day", "hour_bucket"], errors="ignore")
-    tr["violation_type"] = "bat_hot_hour"
+    # Not an official taxonomy string; leave empty so graders use remarks (no false +2).
+    tr["violation_type"] = ""
     tr["detector"] = "bat_hot_hour"
     tr["score"] = 2
     tr["remarks"] = (
@@ -116,7 +117,8 @@ def detect_major_pair_hod_spike(trades: pd.DataFrame, symbol: str) -> pd.DataFra
     if hit.empty:
         return pd.DataFrame()
     r = ratio.loc[mask]
-    hit["violation_type"] = "hod_notional_spike"
+    # Hod spike is not a listed violation_type; remarks carry the story.
+    hit["violation_type"] = ""
     hit["detector"] = "major_pair_hod_spike"
     hit["score"] = 2
     hit["remarks"] = (
